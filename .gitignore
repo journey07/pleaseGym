@@ -30,13 +30,22 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+/.dev.vars*
 
 # vercel
 .vercel
 
 # typescript
 next-env.d.ts
+*.tsbuildinfo
 /dist/
 /.wrangler/
 /outputs/
 /work/
+.gstack/
+.lazyweb/
+
+# local backup copies
+app/page 2.tsx
+app/globals 2.css

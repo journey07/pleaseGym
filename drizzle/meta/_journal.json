@@ -1,5 +1,13 @@
 {
   "version": "7",
-  "dialect": "sqlite",
-  "entries": []
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1784462758771,
+      "tag": "0000_curvy_proudstar",
+      "breakpoints": true
+    }
+  ]
 }

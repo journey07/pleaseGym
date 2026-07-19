@@ -1,0 +1,13 @@
+.vinext
+.wrangler
+dist
+build
+worker
+examples
+tests
+.lazyweb
+.openai
+.dev.vars
+.dev.vars.example
+app/page 2.tsx
+app/globals 2.css

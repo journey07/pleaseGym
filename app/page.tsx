@@ -1,17 +1,22 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import Link from "next/link";
 
 type WorkoutSet = {
   id: string;
   weight: number;
   reps: number;
   done: boolean;
+  distanceKm?: number;
+  inheritWeight?: boolean;
+  inheritReps?: boolean;
 };
 
 type Exercise = {
   id: string;
   name: string;
+  metric?: "weight" | "distance";
   sets: WorkoutSet[];
 };
 
@@ -24,7 +29,14 @@ type Session = {
   exercises: Exercise[];
 };
 
+type FavoriteExercise = {
+  id: string;
+  name: string;
+  metric: "weight" | "distance";
+};
+
 const uid = () => Math.random().toString(36).slice(2, 9);
+const subscribeToHydration = () => () => undefined;
 const pad = (value: number) => String(value).padStart(2, "0");
 const toDateKey = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 const sessionDateKey = (date: string) => toDateKey(new Date(date));
@@ -35,6 +47,43 @@ const formatSelectedDate = (key: string) => new Intl.DateTimeFormat("ko-KR", {
   day: "numeric",
   weekday: "long",
 }).format(dateFromKey(key));
+
+const fixedHolidays: Record<string, string> = {
+  "01-01": "신정",
+  "03-01": "삼일절",
+  "05-05": "어린이날",
+  "06-06": "현충일",
+  "08-15": "광복절",
+  "10-03": "개천절",
+  "10-09": "한글날",
+  "12-25": "성탄절",
+};
+
+const holidays2026: Record<string, string> = {
+  "2026-02-16": "설날 연휴",
+  "2026-02-17": "설날",
+  "2026-02-18": "설날 연휴",
+  "2026-03-02": "대체공휴일",
+  "2026-05-01": "노동절",
+  "2026-05-24": "부처님오신날",
+  "2026-05-25": "대체공휴일",
+  "2026-06-03": "지방선거",
+  "2026-07-17": "제헌절",
+  "2026-08-17": "대체공휴일",
+  "2026-09-24": "추석 연휴",
+  "2026-09-25": "추석",
+  "2026-09-26": "추석 연휴",
+  "2026-10-05": "대체공휴일",
+};
+
+const getKoreanHoliday = (key: string) => {
+  if (holidays2026[key]) return holidays2026[key];
+  const [year, month, day] = key.split("-");
+  const monthDay = `${month}-${day}`;
+  if (Number(year) >= 2026 && monthDay === "05-01") return "노동절";
+  if (Number(year) >= 2026 && monthDay === "07-17") return "제헌절";
+  return fixedHolidays[monthDay] ?? null;
+};
 
 const seedHistory: Session[] = [
   {
@@ -88,15 +137,36 @@ const seedHistory: Session[] = [
   },
 ];
 
-const completedSets = (session: Session) => session.exercises.flatMap((exercise) => exercise.sets.filter((set) => set.done));
-const sessionVolume = (session: Session) => completedSets(session).reduce((sum, set) => sum + set.weight * set.reps, 0);
-const sessionMax = (session: Session) => completedSets(session).reduce((max, set) => Math.max(max, set.weight), 0);
 const cloneExercises = (exercises: Exercise[]) => exercises.map((exercise) => ({
   ...exercise,
   sets: exercise.sets.filter((set) => set.done).map((set) => ({ ...set })),
 }));
 
 const blankSet = (): WorkoutSet => ({ id: uid(), weight: 0, reps: 8, done: true });
+const blankDistance = (): WorkoutSet => ({ id: uid(), weight: 0, reps: 1, done: true, distanceKm: 0 });
+const createDefaultWeightSets = (): WorkoutSet[] => Array.from({ length: 4 }, (_, index) => ({
+  ...blankSet(),
+  inheritWeight: index > 0,
+  inheritReps: index > 0,
+}));
+const createExercise = (name: string, metric: "weight" | "distance"): Exercise => ({
+  id: uid(),
+  name,
+  metric,
+  sets: metric === "distance" ? [blankDistance()] : createDefaultWeightSets(),
+});
+const prepareSetForSave = (set: WorkoutSet): WorkoutSet => {
+  const persisted = { ...set, done: true };
+  delete persisted.inheritWeight;
+  delete persisted.inheritReps;
+  return persisted;
+};
+const normalizeExerciseName = (name: string) => name.trim().toLocaleLowerCase("ko-KR");
+const defaultFavorites: FavoriteExercise[] = [
+  { id: "favorite-squat", name: "백 스쿼트", metric: "weight" },
+  { id: "favorite-bench", name: "벤치 프레스", metric: "weight" },
+  { id: "favorite-run", name: "달리기", metric: "distance" },
+];
 
 export default function Home() {
   const todayKey = useMemo(() => toDateKey(new Date()), []);
@@ -108,9 +178,14 @@ export default function Home() {
   const [history, setHistory] = useState<Session[]>(seedHistory);
   const [draft, setDraft] = useState<Exercise[]>([]);
   const [newExercise, setNewExercise] = useState("");
+  const [newMetric, setNewMetric] = useState<"weight" | "distance">("weight");
+  const [favorites, setFavorites] = useState<FavoriteExercise[]>(defaultFavorites);
   const [loaded, setLoaded] = useState(false);
+  const [favoritesLoaded, setFavoritesLoaded] = useState(false);
+  const [neonReady, setNeonReady] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [toast, setToast] = useState("");
+  const clientReady = useSyncExternalStore(subscribeToHydration, () => true, () => false);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("first-rep-history");
@@ -129,6 +204,80 @@ export default function Home() {
     if (loaded) window.localStorage.setItem("first-rep-history", JSON.stringify(history));
   }, [history, loaded]);
 
+  useEffect(() => {
+    const stored = window.localStorage.getItem("first-rep-favorites");
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored) as FavoriteExercise[];
+        if (Array.isArray(parsed)) setFavorites(parsed);
+      } catch {
+        // Keep the starter favorites when stored data is malformed.
+      }
+    }
+    setFavoritesLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (favoritesLoaded) window.localStorage.setItem("first-rep-favorites", JSON.stringify(favorites));
+  }, [favorites, favoritesLoaded]);
+
+  useEffect(() => {
+    if (!loaded || !favoritesLoaded) return;
+    let cancelled = false;
+
+    const connectNeon = async () => {
+      try {
+        const response = await fetch("/api/state", { cache: "no-store" });
+        if (!response.ok) return;
+        const data = await response.json() as {
+          state?: { history?: unknown; favorites?: unknown } | null;
+        };
+        if (cancelled) return;
+
+        if (data.state) {
+          if (Array.isArray(data.state.history)) setHistory(data.state.history as Session[]);
+          if (Array.isArray(data.state.favorites)) setFavorites(data.state.favorites as FavoriteExercise[]);
+          setNeonReady(true);
+          return;
+        }
+
+        const localHistory = JSON.parse(window.localStorage.getItem("first-rep-history") ?? "[]") as unknown;
+        const localFavorites = JSON.parse(window.localStorage.getItem("first-rep-favorites") ?? "[]") as unknown;
+        const importResponse = await fetch("/api/state", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            history: Array.isArray(localHistory) ? localHistory : history,
+            favorites: Array.isArray(localFavorites) ? localFavorites : favorites,
+            coachMemory: [],
+          }),
+        });
+        if (!cancelled && importResponse.ok) setNeonReady(true);
+      } catch {
+        // Local storage remains the offline source when Neon is unavailable.
+      }
+    };
+
+    void connectNeon();
+    return () => {
+      cancelled = true;
+    };
+    // This runs once after both local caches have been hydrated.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, favoritesLoaded]);
+
+  useEffect(() => {
+    if (!neonReady) return;
+    const timer = window.setTimeout(() => {
+      void fetch("/api/state", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ history, favorites, coachMemory: [] }),
+      });
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [history, favorites, neonReady]);
+
   const sessionsByDate = useMemo(() => {
     const map = new Map<string, Session>();
     history.forEach((session) => map.set(sessionDateKey(session.date), session));
@@ -140,8 +289,34 @@ export default function Home() {
   useEffect(() => {
     setDraft(selectedSession ? cloneExercises(selectedSession.exercises) : []);
     setNewExercise("");
+    setNewMetric("weight");
     setDirty(false);
   }, [selectedDate, selectedSession]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const stored = window.localStorage.getItem("first-rep-coach-draft");
+    if (!stored) return;
+    try {
+      const pending = JSON.parse(stored) as { date?: string; exercises?: Exercise[] };
+      if (pending.date !== todayKey || !Array.isArray(pending.exercises)) {
+        window.localStorage.removeItem("first-rep-coach-draft");
+        return;
+      }
+      if (sessionsByDate.has(todayKey)) {
+        setToast("오늘 기록이 이미 있어 AI 계획을 덮어쓰지 않았어요.");
+        window.localStorage.removeItem("first-rep-coach-draft");
+        return;
+      }
+      setSelectedDate(todayKey);
+      setDraft(pending.exercises);
+      setDirty(true);
+      setToast("AI의 오늘 계획을 운동 초안으로 불러왔어요.");
+      window.localStorage.removeItem("first-rep-coach-draft");
+    } catch {
+      window.localStorage.removeItem("first-rep-coach-draft");
+    }
+  }, [loaded, sessionsByDate, todayKey]);
 
   useEffect(() => {
     if (!toast) return;
@@ -152,9 +327,10 @@ export default function Home() {
   const calendarDays = useMemo(() => {
     const year = visibleMonth.getFullYear();
     const month = visibleMonth.getMonth();
-    const offset = (new Date(year, month, 1).getDay() + 6) % 7;
+    const offset = new Date(year, month, 1).getDay();
     const count = new Date(year, month + 1, 0).getDate();
-    return Array.from({ length: 42 }, (_, index) => {
+    const totalCells = Math.ceil((offset + count) / 7) * 7;
+    return Array.from({ length: totalCells }, (_, index) => {
       const day = index - offset + 1;
       if (day < 1 || day > count) return null;
       const date = new Date(year, month, day);
@@ -168,7 +344,9 @@ export default function Home() {
   }, [history, visibleMonth]);
 
   const monthStats = useMemo(() => {
-    const sets = monthSessions.flatMap(completedSets);
+    const sets = monthSessions.flatMap((session) => session.exercises
+      .filter((exercise) => exercise.metric !== "distance")
+      .flatMap((exercise) => exercise.sets.filter((set) => set.done)));
     return {
       workouts: monthSessions.length,
       sets: sets.length,
@@ -177,11 +355,13 @@ export default function Home() {
   }, [monthSessions]);
 
   const draftStats = useMemo(() => {
-    const sets = draft.flatMap((exercise) => exercise.sets);
+    const sets = draft.filter((exercise) => exercise.metric !== "distance").flatMap((exercise) => exercise.sets);
+    const distanceSets = draft.filter((exercise) => exercise.metric === "distance").flatMap((exercise) => exercise.sets);
     return {
       sets: sets.length,
       volume: sets.reduce((sum, set) => sum + set.weight * set.reps, 0),
       max: sets.reduce((value, set) => Math.max(value, set.weight), 0),
+      distance: distanceSets.reduce((sum, set) => sum + (set.distanceKm ?? 0), 0),
     };
   }, [draft]);
 
@@ -209,13 +389,56 @@ export default function Home() {
     setSelectedDate(todayKey);
   };
 
+  const addExerciseToDraft = (name: string, metric: "weight" | "distance") => {
+    const trimmedName = name.trim();
+    if (!trimmedName) return false;
+    const normalizedName = normalizeExerciseName(trimmedName);
+    const exists = draft.some((exercise) =>
+      normalizeExerciseName(exercise.name) === normalizedName
+      && (exercise.metric ?? "weight") === metric);
+    if (exists) {
+      setToast("이미 이날의 기록에 추가된 운동이에요.");
+      return false;
+    }
+    setDraft((current) => [...current, createExercise(trimmedName, metric)]);
+    setDirty(true);
+    return true;
+  };
+
   const addExercise = (event: FormEvent) => {
     event.preventDefault();
-    const name = newExercise.trim();
-    if (!name) return;
-    setDraft((current) => [...current, { id: uid(), name, sets: [blankSet()] }]);
-    setNewExercise("");
-    setDirty(true);
+    if (addExerciseToDraft(newExercise, newMetric)) {
+      setNewExercise("");
+      setNewMetric("weight");
+    }
+  };
+
+  const isFavorite = (exercise: Exercise) => favorites.some((favorite) =>
+    normalizeExerciseName(favorite.name) === normalizeExerciseName(exercise.name)
+    && favorite.metric === (exercise.metric ?? "weight"));
+
+  const toggleFavorite = (exercise: Exercise) => {
+    const metric = exercise.metric ?? "weight";
+    const name = exercise.name.trim();
+    if (!name) {
+      setToast("운동 이름을 먼저 입력해주세요.");
+      return;
+    }
+    const match = favorites.find((favorite) =>
+      normalizeExerciseName(favorite.name) === normalizeExerciseName(name)
+      && favorite.metric === metric);
+    if (match) {
+      setFavorites((current) => current.filter((favorite) => favorite.id !== match.id));
+      setToast(`${name} 즐겨찾기를 해제했어요.`);
+      return;
+    }
+    setFavorites((current) => [...current, { id: uid(), name, metric }]);
+    setToast(`${name}을 즐겨찾기에 등록했어요.`);
+  };
+
+  const removeFavorite = (favorite: FavoriteExercise) => {
+    setFavorites((current) => current.filter((item) => item.id !== favorite.id));
+    setToast(`${favorite.name} 즐겨찾기를 해제했어요.`);
   };
 
   const updateExerciseName = (exerciseId: string, name: string) => {
@@ -236,9 +459,30 @@ export default function Home() {
   };
 
   const updateSet = (exerciseId: string, setId: string, patch: Partial<WorkoutSet>) => {
-    setDraft((current) => current.map((exercise) => exercise.id === exerciseId
-      ? { ...exercise, sets: exercise.sets.map((set) => set.id === setId ? { ...set, ...patch } : set) }
-      : exercise));
+    setDraft((current) => current.map((exercise) => {
+      if (exercise.id !== exerciseId) return exercise;
+      const editedIndex = exercise.sets.findIndex((set) => set.id === setId);
+      if (editedIndex < 0) return exercise;
+
+      const sets = exercise.sets.map((set, setIndex) => {
+        if (setIndex === editedIndex) {
+          return {
+            ...set,
+            ...patch,
+            ...(editedIndex > 0 && patch.weight !== undefined ? { inheritWeight: false } : {}),
+            ...(editedIndex > 0 && patch.reps !== undefined ? { inheritReps: false } : {}),
+          };
+        }
+        if (editedIndex !== 0) return set;
+        return {
+          ...set,
+          ...(patch.weight !== undefined && set.inheritWeight ? { weight: patch.weight } : {}),
+          ...(patch.reps !== undefined && set.inheritReps ? { reps: patch.reps } : {}),
+        };
+      });
+
+      return { ...exercise, sets };
+    }));
     setDirty(true);
   };
 
@@ -259,8 +503,10 @@ export default function Home() {
       .map((exercise) => ({
         ...exercise,
         name: exercise.name.trim(),
-        sets: exercise.sets.filter((set) => Number.isFinite(set.weight) && set.weight >= 0 && Number.isFinite(set.reps) && set.reps > 0)
-          .map((set) => ({ ...set, done: true })),
+        sets: exercise.sets.filter((set) => exercise.metric === "distance"
+          ? Number.isFinite(set.distanceKm) && (set.distanceKm ?? 0) > 0
+          : Number.isFinite(set.weight) && set.weight >= 0 && Number.isFinite(set.reps) && set.reps > 0)
+          .map(prepareSetForSave),
       }))
       .filter((exercise) => exercise.name && exercise.sets.length > 0);
 
@@ -298,6 +544,15 @@ export default function Home() {
 
   const monthLabel = new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "long" }).format(visibleMonth);
 
+  if (!clientReady) {
+    return (
+      <main className="hydration-shell" aria-label="FIRST REP 불러오는 중">
+        <span>1</span>
+        <b>FIRST REP</b>
+      </main>
+    );
+  }
+
   return (
     <main className="app">
       <header className="site-header">
@@ -306,7 +561,10 @@ export default function Home() {
           <b>FIRST REP</b>
         </button>
         <p>운동을 기억하는 가장 단순한 방법.</p>
-        <button className="today-button" onClick={goToday}>오늘</button>
+        <div className="header-actions">
+          <Link className="morning-button" href="/morning">MORNING</Link>
+          <button className="today-button" onClick={goToday}>오늘</button>
+        </div>
       </header>
 
       <section className="summary" aria-label="이번 달 요약">
@@ -342,27 +600,48 @@ export default function Home() {
           </div>
 
           <div className="weekdays" aria-hidden="true">
-            {['월', '화', '수', '목', '금', '토', '일'].map((day) => <span key={day}>{day}</span>)}
+            {['일', '월', '화', '수', '목', '금', '토'].map((day, index) => <span className={index === 0 || index === 6 ? "weekend" : ""} key={day}>{day}</span>)}
           </div>
           <div className="calendar-grid">
             {calendarDays.map((date, index) => {
               if (!date) return <div className="calendar-empty" key={`empty-${index}`} />;
               const session = sessionsByDate.get(date.key);
-              const sets = session ? completedSets(session).length : 0;
+              const holidayName = getKoreanHoliday(date.key);
+              const dayOfWeek = dateFromKey(date.key).getDay();
+              const isRedDate = dayOfWeek === 0 || dayOfWeek === 6 || Boolean(holidayName);
+              const dayRecords = session ? session.exercises.map((exercise) => {
+                const sets = exercise.sets.filter((set) => set.done);
+                const isDistance = exercise.metric === "distance";
+                return {
+                  id: exercise.id,
+                  name: exercise.name,
+                  value: isDistance
+                    ? sets.reduce((sum, set) => sum + (set.distanceKm ?? 0), 0)
+                    : sets.reduce((value, set) => Math.max(value, set.weight), 0),
+                  unit: isDistance ? "km" : "kg",
+                };
+              }) : [];
+              const spokenRecords = dayRecords.map((record) => `${record.name} ${formatNumber(record.value)}${record.unit}`).join(", ");
               return (
                 <button
                   key={date.key}
-                  className={`calendar-day ${selectedDate === date.key ? "selected" : ""} ${date.key === todayKey ? "today" : ""} ${session ? "has-workout" : ""}`}
+                  className={`calendar-day ${selectedDate === date.key ? "selected" : ""} ${date.key === todayKey ? "today" : ""} ${session ? "has-workout" : ""} ${isRedDate ? "red-day" : ""}`}
                   onClick={() => selectDate(date.key)}
                   aria-pressed={selectedDate === date.key}
-                  aria-label={`${date.day}일${session ? `, 운동 ${sets}세트` : ", 기록 없음"}`}
+                  aria-label={`${date.day}일${holidayName ? ` ${holidayName}` : ""}${session ? `, ${spokenRecords}` : ", 기록 없음"}`}
                 >
-                  <span className="day-number">{date.day}</span>
+                  <span className="date-line">
+                    <span className="day-number">{date.day}</span>
+                    {holidayName && <small>{holidayName}</small>}
+                  </span>
                   {session ? (
                     <span className="day-workout">
-                      <i />
-                      <b>{sets} sets</b>
-                      <small>max {formatNumber(sessionMax(session))}kg</small>
+                      {dayRecords.map((record) => (
+                        <span className="day-lift" key={record.id}>
+                          <b>{record.name}</b>
+                          <strong>{formatNumber(record.value)}<small>{record.unit}</small></strong>
+                        </span>
+                      ))}
                     </span>
                   ) : <span className="add-hint">＋ 기록</span>}
                 </button>
@@ -383,7 +662,9 @@ export default function Home() {
           {draft.length > 0 ? (
             <div className="draft-list">
               {draft.map((exercise, exerciseIndex) => {
+                const isDistance = exercise.metric === "distance";
                 const max = exercise.sets.reduce((value, set) => Math.max(value, set.weight), 0);
+                const distance = exercise.sets.reduce((sum, set) => sum + (set.distanceKm ?? 0), 0);
                 return (
                   <article className="exercise-entry" key={exercise.id}>
                     <div className="exercise-head">
@@ -393,35 +674,59 @@ export default function Home() {
                         onChange={(event) => updateExerciseName(exercise.id, event.target.value)}
                         aria-label={`${exerciseIndex + 1}번째 운동 이름`}
                       />
-                      <small>MAX {formatNumber(max)}kg</small>
+                      <small>{isDistance ? `${formatNumber(distance)}km` : `MAX ${formatNumber(max)}kg`}</small>
+                      <button
+                        className={`favorite-toggle ${isFavorite(exercise) ? "active" : ""}`}
+                        onClick={() => toggleFavorite(exercise)}
+                        aria-label={`${exercise.name} 즐겨찾기 ${isFavorite(exercise) ? "해제" : "등록"}`}
+                        title={isFavorite(exercise) ? "즐겨찾기 해제" : "즐겨찾기 등록"}
+                      >{isFavorite(exercise) ? "★" : "☆"}</button>
                       <button onClick={() => removeExercise(exercise.id)} aria-label={`${exercise.name} 삭제`}>×</button>
                     </div>
-                    <div className="sets-head"><span>SET</span><span>KG</span><span>REPS</span><span /></div>
-                    {exercise.sets.map((set, setIndex) => (
-                      <div className="set-entry" key={set.id}>
-                        <b>{setIndex + 1}</b>
+                    {isDistance ? (
+                      <div className="distance-entry">
+                        <span>DISTANCE</span>
                         <input
                           type="number"
                           min="0"
-                          step="0.5"
+                          step="0.1"
                           inputMode="decimal"
-                          value={set.weight}
-                          onChange={(event) => updateSet(exercise.id, set.id, { weight: Number(event.target.value) })}
-                          aria-label={`${exercise.name} ${setIndex + 1}세트 중량`}
+                          value={exercise.sets[0]?.distanceKm ?? 0}
+                          onChange={(event) => updateSet(exercise.id, exercise.sets[0].id, { distanceKm: Number(event.target.value) })}
+                          aria-label={`${exercise.name} 거리`}
                         />
-                        <input
-                          type="number"
-                          min="1"
-                          step="1"
-                          inputMode="numeric"
-                          value={set.reps}
-                          onChange={(event) => updateSet(exercise.id, set.id, { reps: Number(event.target.value) })}
-                          aria-label={`${exercise.name} ${setIndex + 1}세트 반복`}
-                        />
-                        <button onClick={() => removeSet(exercise.id, set.id)} aria-label={`${setIndex + 1}세트 삭제`}>×</button>
+                        <b>km</b>
                       </div>
-                    ))}
-                    <button className="add-set-button" onClick={() => addSet(exercise.id)}>＋ 세트</button>
+                    ) : (
+                      <>
+                        <div className="sets-head"><span>SET</span><span>KG</span><span>REPS</span><span /></div>
+                        {exercise.sets.map((set, setIndex) => (
+                          <div className="set-entry" key={set.id}>
+                            <b>{setIndex + 1}</b>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.5"
+                              inputMode="decimal"
+                              value={set.weight}
+                              onChange={(event) => updateSet(exercise.id, set.id, { weight: Number(event.target.value) })}
+                              aria-label={`${exercise.name} ${setIndex + 1}세트 중량`}
+                            />
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              inputMode="numeric"
+                              value={set.reps}
+                              onChange={(event) => updateSet(exercise.id, set.id, { reps: Number(event.target.value) })}
+                              aria-label={`${exercise.name} ${setIndex + 1}세트 반복`}
+                            />
+                            <button onClick={() => removeSet(exercise.id, set.id)} aria-label={`${setIndex + 1}세트 삭제`}>×</button>
+                          </div>
+                        ))}
+                        <button className="add-set-button" onClick={() => addSet(exercise.id)}>＋ 세트</button>
+                      </>
+                    )}
                   </article>
                 );
               })}
@@ -434,11 +739,44 @@ export default function Home() {
             </div>
           )}
 
+          <section className="favorites" aria-label="즐겨찾기 운동">
+            <div className="favorites-head">
+              <span>FAVORITES</span>
+              <small>운동 카드의 ☆로 등록</small>
+            </div>
+            {favorites.length > 0 ? (
+              <div className="favorite-list">
+                {favorites.map((favorite) => (
+                  <div className="favorite-chip" key={favorite.id}>
+                    <button
+                      className="favorite-add"
+                      onClick={() => addExerciseToDraft(favorite.name, favorite.metric)}
+                      aria-label={`${favorite.name} 빠르게 추가`}
+                    >
+                      <span>★</span>
+                      <b>{favorite.name}</b>
+                      <small>{favorite.metric === "distance" ? "km" : "kg"}</small>
+                    </button>
+                    <button
+                      className="favorite-remove"
+                      onClick={() => removeFavorite(favorite)}
+                      aria-label={`${favorite.name} 즐겨찾기 해제`}
+                    >×</button>
+                  </div>
+                ))}
+              </div>
+            ) : <p>운동 카드의 ☆를 눌러 자주 하는 운동을 등록하세요.</p>}
+          </section>
+
           <form className="add-exercise" onSubmit={addExercise}>
+            <select value={newMetric} onChange={(event) => setNewMetric(event.target.value as "weight" | "distance")} aria-label="운동 기록 방식">
+              <option value="weight">중량</option>
+              <option value="distance">거리</option>
+            </select>
             <input
               value={newExercise}
               onChange={(event) => setNewExercise(event.target.value)}
-              placeholder="예: 백 스쿼트"
+              placeholder={newMetric === "distance" ? "예: 달리기" : "예: 백 스쿼트"}
               aria-label="추가할 운동 이름"
             />
             <button type="submit">추가</button>
@@ -448,6 +786,7 @@ export default function Home() {
             <span>{draftStats.sets} sets</span>
             <span>{formatNumber(draftStats.volume)}kg volume</span>
             <span>max {formatNumber(draftStats.max)}kg</span>
+            {draftStats.distance > 0 && <span>{formatNumber(draftStats.distance)}km</span>}
           </div>
 
           <div className="editor-actions">
