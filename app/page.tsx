@@ -2,15 +2,11 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-type Tab = "today" | "live" | "history" | "coach";
-type Readiness = "push" | "maintain" | "recover";
-
 type WorkoutSet = {
   id: string;
   weight: number;
   reps: number;
   done: boolean;
-  previous?: string;
 };
 
 type Exercise = {
@@ -24,48 +20,27 @@ type Session = {
   date: string;
   title: string;
   durationMinutes: number;
-  lane: Readiness;
+  lane: "push" | "maintain" | "recover";
   exercises: Exercise[];
 };
 
 const uid = () => Math.random().toString(36).slice(2, 9);
-
-const createWorkout = (): Exercise[] => [
-  {
-    id: uid(),
-    name: "백 스쿼트",
-    sets: [
-      { id: uid(), weight: 50, reps: 8, done: false, previous: "50 × 8" },
-      { id: uid(), weight: 60, reps: 6, done: false, previous: "57.5 × 6" },
-      { id: uid(), weight: 60, reps: 6, done: false, previous: "57.5 × 5" },
-      { id: uid(), weight: 55, reps: 8, done: false, previous: "55 × 8" },
-    ],
-  },
-  {
-    id: uid(),
-    name: "벤치 프레스",
-    sets: [
-      { id: uid(), weight: 42.5, reps: 8, done: false, previous: "42.5 × 8" },
-      { id: uid(), weight: 47.5, reps: 6, done: false, previous: "45 × 7" },
-      { id: uid(), weight: 47.5, reps: 6, done: false, previous: "45 × 6" },
-    ],
-  },
-  {
-    id: uid(),
-    name: "시티드 케이블 로우",
-    sets: [
-      { id: uid(), weight: 45, reps: 10, done: false, previous: "42.5 × 10" },
-      { id: uid(), weight: 45, reps: 10, done: false, previous: "42.5 × 10" },
-      { id: uid(), weight: 45, reps: 10, done: false, previous: "42.5 × 9" },
-    ],
-  },
-];
+const pad = (value: number) => String(value).padStart(2, "0");
+const toDateKey = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+const sessionDateKey = (date: string) => toDateKey(new Date(date));
+const dateFromKey = (key: string) => new Date(`${key}T12:00:00`);
+const formatNumber = (value: number) => new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 1 }).format(value);
+const formatSelectedDate = (key: string) => new Intl.DateTimeFormat("ko-KR", {
+  month: "long",
+  day: "numeric",
+  weekday: "long",
+}).format(dateFromKey(key));
 
 const seedHistory: Session[] = [
   {
     id: "seed-1",
     date: "2026-07-17T06:14:00+09:00",
-    title: "Full Body · A",
+    title: "Full Body",
     durationMinutes: 38,
     lane: "push",
     exercises: [
@@ -90,7 +65,7 @@ const seedHistory: Session[] = [
   {
     id: "seed-2",
     date: "2026-07-14T06:18:00+09:00",
-    title: "Full Body · B",
+    title: "Full Body",
     durationMinutes: 34,
     lane: "maintain",
     exercises: [
@@ -113,33 +88,39 @@ const seedHistory: Session[] = [
   },
 ];
 
-const sessionSets = (session: Session) => session.exercises.flatMap((exercise) => exercise.sets.filter((set) => set.done));
-const sessionVolume = (session: Session) => sessionSets(session).reduce((total, set) => total + set.weight * set.reps, 0);
-const formatNumber = (value: number) => new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 1 }).format(value);
-const formatDate = (date: string) => new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric", weekday: "short" }).format(new Date(date));
+const completedSets = (session: Session) => session.exercises.flatMap((exercise) => exercise.sets.filter((set) => set.done));
+const sessionVolume = (session: Session) => completedSets(session).reduce((sum, set) => sum + set.weight * set.reps, 0);
+const sessionMax = (session: Session) => completedSets(session).reduce((max, set) => Math.max(max, set.weight), 0);
+const cloneExercises = (exercises: Exercise[]) => exercises.map((exercise) => ({
+  ...exercise,
+  sets: exercise.sets.filter((set) => set.done).map((set) => ({ ...set })),
+}));
 
-const laneCopy: Record<Readiness, { label: string; title: string; detail: string }> = {
-  push: { label: "A · PUSH", title: "정상 세션", detail: "점진적 과부하 적용 · 35분" },
-  maintain: { label: "B · MAINTAIN", title: "볼륨 70%", detail: "핵심 리프트 유지 · 25분" },
-  recover: { label: "C · RECOVER", title: "회복 프로토콜", detail: "관절·코어 중심 · 12분" },
-};
+const blankSet = (): WorkoutSet => ({ id: uid(), weight: 0, reps: 8, done: true });
 
 export default function Home() {
-  const [tab, setTab] = useState<Tab>("today");
-  const [readiness, setReadiness] = useState<Readiness>("push");
-  const [exercises, setExercises] = useState<Exercise[]>(createWorkout);
+  const todayKey = useMemo(() => toDateKey(new Date()), []);
+  const [selectedDate, setSelectedDate] = useState(todayKey);
+  const [visibleMonth, setVisibleMonth] = useState(() => {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), 1);
+  });
   const [history, setHistory] = useState<Session[]>(seedHistory);
+  const [draft, setDraft] = useState<Exercise[]>([]);
   const [newExercise, setNewExercise] = useState("");
-  const [elapsed, setElapsed] = useState(0);
-  const [restSeconds, setRestSeconds] = useState(0);
-  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
-  const [toast, setToast] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [toast, setToast] = useState("");
 
   useEffect(() => {
     const stored = window.localStorage.getItem("first-rep-history");
     if (stored) {
-      try { setHistory(JSON.parse(stored)); } catch { /* keep demo history */ }
+      try {
+        const parsed = JSON.parse(stored) as Session[];
+        if (Array.isArray(parsed)) setHistory(parsed);
+      } catch {
+        // Keep the demo history when stored data is malformed.
+      }
     }
     setLoaded(true);
   }, []);
@@ -148,372 +129,335 @@ export default function Home() {
     if (loaded) window.localStorage.setItem("first-rep-history", JSON.stringify(history));
   }, [history, loaded]);
 
-  useEffect(() => {
-    if (!sessionStartedAt) return;
-    const tick = () => setElapsed(Math.floor((Date.now() - sessionStartedAt) / 1000));
-    tick();
-    const timer = window.setInterval(tick, 1000);
-    return () => window.clearInterval(timer);
-  }, [sessionStartedAt]);
+  const sessionsByDate = useMemo(() => {
+    const map = new Map<string, Session>();
+    history.forEach((session) => map.set(sessionDateKey(session.date), session));
+    return map;
+  }, [history]);
+
+  const selectedSession = sessionsByDate.get(selectedDate);
 
   useEffect(() => {
-    if (restSeconds <= 0) return;
-    const timer = window.setInterval(() => setRestSeconds((current) => Math.max(0, current - 1)), 1000);
-    return () => window.clearInterval(timer);
-  }, [restSeconds]);
+    setDraft(selectedSession ? cloneExercises(selectedSession.exercises) : []);
+    setNewExercise("");
+    setDirty(false);
+  }, [selectedDate, selectedSession]);
 
   useEffect(() => {
     if (!toast) return;
-    const timer = window.setTimeout(() => setToast(""), 3200);
+    const timer = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const activeStats = useMemo(() => {
-    const doneSets = exercises.flatMap((exercise) => exercise.sets.filter((set) => set.done));
-    return {
-      sets: doneSets.length,
-      volume: doneSets.reduce((sum, set) => sum + set.weight * set.reps, 0),
-      max: doneSets.reduce((max, set) => Math.max(max, set.weight), 0),
-    };
-  }, [exercises]);
+  const calendarDays = useMemo(() => {
+    const year = visibleMonth.getFullYear();
+    const month = visibleMonth.getMonth();
+    const offset = (new Date(year, month, 1).getDay() + 6) % 7;
+    const count = new Date(year, month + 1, 0).getDate();
+    return Array.from({ length: 42 }, (_, index) => {
+      const day = index - offset + 1;
+      if (day < 1 || day > count) return null;
+      const date = new Date(year, month, day);
+      return { day, key: toDateKey(date) };
+    });
+  }, [visibleMonth]);
 
-  const allTimeStats = useMemo(() => {
-    const sets = history.flatMap(sessionSets);
+  const monthSessions = useMemo(() => {
+    const prefix = `${visibleMonth.getFullYear()}-${pad(visibleMonth.getMonth() + 1)}`;
+    return history.filter((session) => sessionDateKey(session.date).startsWith(prefix));
+  }, [history, visibleMonth]);
+
+  const monthStats = useMemo(() => {
+    const sets = monthSessions.flatMap(completedSets);
     return {
-      sessions: history.length,
+      workouts: monthSessions.length,
       sets: sets.length,
-      volume: history.reduce((sum, session) => sum + sessionVolume(session), 0),
-      max: sets.reduce((max, set) => Math.max(max, set.weight), 0),
+      max: sets.reduce((value, set) => Math.max(value, set.weight), 0),
     };
-  }, [history]);
+  }, [monthSessions]);
 
-  const exerciseRecords = useMemo(() => {
-    const records = new Map<string, { sessions: Set<string>; sets: number; max: number; best: string; volume: number }>();
-    history.forEach((session) => session.exercises.forEach((exercise) => {
-      const current = records.get(exercise.name) ?? { sessions: new Set<string>(), sets: 0, max: 0, best: "—", volume: 0 };
-      current.sessions.add(session.id);
-      exercise.sets.filter((set) => set.done).forEach((set) => {
-        current.sets += 1;
-        current.volume += set.weight * set.reps;
-        if (set.weight > current.max) {
-          current.max = set.weight;
-          current.best = `${formatNumber(set.weight)}kg × ${set.reps}`;
-        }
-      });
-      records.set(exercise.name, current);
+  const draftStats = useMemo(() => {
+    const sets = draft.flatMap((exercise) => exercise.sets);
+    return {
+      sets: sets.length,
+      volume: sets.reduce((sum, set) => sum + set.weight * set.reps, 0),
+      max: sets.reduce((value, set) => Math.max(value, set.weight), 0),
+    };
+  }, [draft]);
+
+  const coachInsight = useMemo(() => {
+    if (monthSessions.length === 0) return "첫 기록을 남기면 다음 운동의 중량과 반복을 제안할게요.";
+    const exerciseCounts = new Map<string, number>();
+    monthSessions.forEach((session) => session.exercises.forEach((exercise) => {
+      exerciseCounts.set(exercise.name, (exerciseCounts.get(exercise.name) ?? 0) + 1);
     }));
-    return [...records.entries()].map(([name, record]) => ({ name, ...record, sessions: record.sessions.size }));
-  }, [history]);
+    const mostFrequent = [...exerciseCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+    return `${visibleMonth.getMonth() + 1}월 ${monthSessions.length}회 완료. ${mostFrequent?.[0] ?? "운동"}을 가장 꾸준히 기록했어요.`;
+  }, [monthSessions, visibleMonth]);
 
-  const startWorkout = () => {
-    setSessionStartedAt(Date.now());
-    setElapsed(0);
-    setTab("live");
+  const selectDate = (key: string) => {
+    setSelectedDate(key);
   };
 
-  const updateSet = (exerciseId: string, setId: string, patch: Partial<WorkoutSet>) => {
-    setExercises((current) => current.map((exercise) => exercise.id === exerciseId
-      ? { ...exercise, sets: exercise.sets.map((set) => set.id === setId ? { ...set, ...patch } : set) }
-      : exercise));
+  const moveMonth = (amount: number) => {
+    setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + amount, 1));
   };
 
-  const toggleSet = (exerciseId: string, set: WorkoutSet) => {
-    updateSet(exerciseId, set.id, { done: !set.done });
-    if (!set.done) setRestSeconds(90);
-  };
-
-  const addSet = (exerciseId: string) => {
-    setExercises((current) => current.map((exercise) => {
-      if (exercise.id !== exerciseId) return exercise;
-      const last = exercise.sets.at(-1);
-      return { ...exercise, sets: [...exercise.sets, { id: uid(), weight: last?.weight ?? 0, reps: last?.reps ?? 8, done: false, previous: "—" }] };
-    }));
-  };
-
-  const removeSet = (exerciseId: string, setId: string) => {
-    setExercises((current) => current.map((exercise) => exercise.id === exerciseId
-      ? { ...exercise, sets: exercise.sets.filter((set) => set.id !== setId) }
-      : exercise));
+  const goToday = () => {
+    const today = new Date();
+    setVisibleMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+    setSelectedDate(todayKey);
   };
 
   const addExercise = (event: FormEvent) => {
     event.preventDefault();
     const name = newExercise.trim();
     if (!name) return;
-    setExercises((current) => [...current, {
-      id: uid(),
-      name,
-      sets: [{ id: uid(), weight: 0, reps: 8, done: false, previous: "—" }],
-    }]);
+    setDraft((current) => [...current, { id: uid(), name, sets: [blankSet()] }]);
     setNewExercise("");
+    setDirty(true);
   };
 
-  const finishWorkout = () => {
-    if (activeStats.sets === 0) {
-      setToast("완료한 세트가 아직 없습니다.");
+  const updateExerciseName = (exerciseId: string, name: string) => {
+    setDraft((current) => current.map((exercise) => exercise.id === exerciseId ? { ...exercise, name } : exercise));
+    setDirty(true);
+  };
+
+  const addSet = (exerciseId: string) => {
+    setDraft((current) => current.map((exercise) => {
+      if (exercise.id !== exerciseId) return exercise;
+      const previous = exercise.sets.at(-1);
+      return {
+        ...exercise,
+        sets: [...exercise.sets, { ...blankSet(), weight: previous?.weight ?? 0, reps: previous?.reps ?? 8 }],
+      };
+    }));
+    setDirty(true);
+  };
+
+  const updateSet = (exerciseId: string, setId: string, patch: Partial<WorkoutSet>) => {
+    setDraft((current) => current.map((exercise) => exercise.id === exerciseId
+      ? { ...exercise, sets: exercise.sets.map((set) => set.id === setId ? { ...set, ...patch } : set) }
+      : exercise));
+    setDirty(true);
+  };
+
+  const removeSet = (exerciseId: string, setId: string) => {
+    setDraft((current) => current.map((exercise) => exercise.id === exerciseId
+      ? { ...exercise, sets: exercise.sets.filter((set) => set.id !== setId) }
+      : exercise));
+    setDirty(true);
+  };
+
+  const removeExercise = (exerciseId: string) => {
+    setDraft((current) => current.filter((exercise) => exercise.id !== exerciseId));
+    setDirty(true);
+  };
+
+  const saveWorkout = () => {
+    const cleaned = draft
+      .map((exercise) => ({
+        ...exercise,
+        name: exercise.name.trim(),
+        sets: exercise.sets.filter((set) => Number.isFinite(set.weight) && set.weight >= 0 && Number.isFinite(set.reps) && set.reps > 0)
+          .map((set) => ({ ...set, done: true })),
+      }))
+      .filter((exercise) => exercise.name && exercise.sets.length > 0);
+
+    if (cleaned.length === 0) {
+      setToast("운동과 세트를 하나 이상 입력해주세요.");
       return;
     }
-    const completedExercises = exercises
-      .map((exercise) => ({ ...exercise, sets: exercise.sets.filter((set) => set.done) }))
-      .filter((exercise) => exercise.sets.length > 0);
+
     const session: Session = {
-      id: uid(),
-      date: new Date().toISOString(),
-      title: `Morning Strength · ${laneCopy[readiness].label.charAt(0)}`,
-      durationMinutes: Math.max(1, Math.round(elapsed / 60)),
-      lane: readiness,
-      exercises: completedExercises,
+      id: selectedSession?.id ?? uid(),
+      date: `${selectedDate}T12:00:00`,
+      title: cleaned.length === 1 ? cleaned[0].name : `${cleaned.length} exercises`,
+      durationMinutes: selectedSession?.durationMinutes ?? 0,
+      lane: selectedSession?.lane ?? "maintain",
+      exercises: cleaned,
     };
-    setHistory((current) => [session, ...current]);
-    setExercises(createWorkout());
-    setSessionStartedAt(null);
-    setElapsed(0);
-    setRestSeconds(0);
-    setToast(`${sessionSets(session).length}세트 · ${formatNumber(sessionVolume(session))}kg 저장 완료`);
-    setTab("history");
+
+    setHistory((current) => [
+      ...current.filter((item) => sessionDateKey(item.date) !== selectedDate),
+      session,
+    ].sort((a, b) => b.date.localeCompare(a.date)));
+    setDraft(cloneExercises(cleaned));
+    setDirty(false);
+    setToast(selectedSession ? "운동 기록을 수정했어요." : "운동 기록을 저장했어요.");
   };
 
-  const elapsedLabel = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
-  const restLabel = `${String(Math.floor(restSeconds / 60)).padStart(2, "0")}:${String(restSeconds % 60).padStart(2, "0")}`;
+  const deleteWorkout = () => {
+    if (!selectedSession) return;
+    if (!window.confirm(`${formatSelectedDate(selectedDate)} 운동 기록을 삭제할까요?`)) return;
+    setHistory((current) => current.filter((session) => sessionDateKey(session.date) !== selectedDate));
+    setDraft([]);
+    setDirty(false);
+    setToast("이 날짜의 기록을 삭제했어요.");
+  };
+
+  const monthLabel = new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "long" }).format(visibleMonth);
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <button className="brand" onClick={() => setTab("today")} aria-label="FIRST REP 홈">
-          <span className="brand-mark">1</span>
-          <span><strong>FIRST REP</strong><small>06:00 PROTOCOL</small></span>
+    <main className="app">
+      <header className="site-header">
+        <button className="wordmark" onClick={goToday} aria-label="오늘로 이동">
+          <span>1</span>
+          <b>FIRST REP</b>
         </button>
-        <nav aria-label="주요 메뉴">
-          <button className={tab === "today" ? "active" : ""} onClick={() => setTab("today")}><span>01</span>오늘</button>
-          <button className={tab === "live" ? "active" : ""} onClick={() => setTab("live")}><span>02</span>운동 기록</button>
-          <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}><span>03</span>히스토리</button>
-          <button className={tab === "coach" ? "active" : ""} onClick={() => setTab("coach")}><span>04</span>AI 코치</button>
-        </nav>
-        <div className="streak-card">
-          <span>CONSISTENCY</span>
-          <strong>12</strong>
-          <p>일 연속 계획 이행</p>
-          <div><i style={{ width: "78%" }} /></div>
-          <small>이번 달 7 / 9 세션</small>
+        <p>운동을 기억하는 가장 단순한 방법.</p>
+        <button className="today-button" onClick={goToday}>오늘</button>
+      </header>
+
+      <section className="summary" aria-label="이번 달 요약">
+        <div>
+          <span>THIS MONTH</span>
+          <strong>{monthStats.workouts}<small>회</small></strong>
         </div>
-        <div className="profile-line"><span>IJ</span><div><b>Injeon</b><small>Strength · Level 04</small></div></div>
-      </aside>
+        <div>
+          <span>TOTAL SETS</span>
+          <strong>{monthStats.sets}<small>세트</small></strong>
+        </div>
+        <div>
+          <span>HEAVIEST</span>
+          <strong>{formatNumber(monthStats.max)}<small>kg</small></strong>
+        </div>
+        <div className="coach-summary">
+          <span>AI COACH</span>
+          <p>{coachInsight}</p>
+        </div>
+      </section>
 
-      <main className="main-content">
-        <header className="topbar">
-          <div><span className="status-dot" /> MORNING SYSTEM ONLINE</div>
-          <div className="top-actions"><span>SEOUL · KST</span><button onClick={() => setTab("history")}>기록 보기</button></div>
-        </header>
+      <div className="workspace">
+        <section className="calendar-panel">
+          <div className="calendar-toolbar">
+            <div>
+              <span>TRAINING CALENDAR</span>
+              <h1>{monthLabel}</h1>
+            </div>
+            <div className="month-controls">
+              <button onClick={() => moveMonth(-1)} aria-label="이전 달">←</button>
+              <button onClick={() => moveMonth(1)} aria-label="다음 달">→</button>
+            </div>
+          </div>
 
-        {tab === "today" && (
-          <section className="page today-page">
-            <div className="page-kicker">SUNDAY · JUL 19</div>
-            <div className="today-grid">
-              <div className="contract-card">
-                <div className="contract-head">
-                  <span>TODAY&apos;S CONTRACT</span>
-                  <span className="time">06:16</span>
-                </div>
-                <h1>첫 세트 전까지<br />협상하지 않는다.</h1>
-                <p className="lead">지난 2회 기록과 오늘 컨디션을 기준으로 만든 35분 전신 세션입니다.</p>
+          <div className="weekdays" aria-hidden="true">
+            {['월', '화', '수', '목', '금', '토', '일'].map((day) => <span key={day}>{day}</span>)}
+          </div>
+          <div className="calendar-grid">
+            {calendarDays.map((date, index) => {
+              if (!date) return <div className="calendar-empty" key={`empty-${index}`} />;
+              const session = sessionsByDate.get(date.key);
+              const sets = session ? completedSets(session).length : 0;
+              return (
+                <button
+                  key={date.key}
+                  className={`calendar-day ${selectedDate === date.key ? "selected" : ""} ${date.key === todayKey ? "today" : ""} ${session ? "has-workout" : ""}`}
+                  onClick={() => selectDate(date.key)}
+                  aria-pressed={selectedDate === date.key}
+                  aria-label={`${date.day}일${session ? `, 운동 ${sets}세트` : ", 기록 없음"}`}
+                >
+                  <span className="day-number">{date.day}</span>
+                  {session ? (
+                    <span className="day-workout">
+                      <i />
+                      <b>{sets} sets</b>
+                      <small>max {formatNumber(sessionMax(session))}kg</small>
+                    </span>
+                  ) : <span className="add-hint">＋ 기록</span>}
+                </button>
+              );
+            })}
+          </div>
+        </section>
 
-                <div className="readiness-label"><b>오늘의 레인 선택</b><span>수면 · 통증 · 가용 시간을 반영하세요</span></div>
-                <div className="readiness-options">
-                  {(Object.keys(laneCopy) as Readiness[]).map((lane) => (
-                    <button key={lane} className={readiness === lane ? "selected" : ""} onClick={() => setReadiness(lane)}>
-                      <span>{laneCopy[lane].label}</span>
-                      <b>{laneCopy[lane].title}</b>
-                      <small>{laneCopy[lane].detail}</small>
-                    </button>
-                  ))}
-                </div>
+        <aside className="editor-panel">
+          <div className="editor-head">
+            <div>
+              <span>{selectedSession ? "WORKOUT LOG" : "NEW WORKOUT"}</span>
+              <h2>{formatSelectedDate(selectedDate)}</h2>
+            </div>
+            {dirty && <i>수정 중</i>}
+          </div>
 
-                <div className="plan-preview">
-                  <div className="plan-title"><span>오늘 처방</span><span>{exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0)} SETS</span></div>
-                  {exercises.map((exercise, index) => (
-                    <div className="plan-row" key={exercise.id}>
-                      <span>{String(index + 1).padStart(2, "0")}</span>
-                      <b>{exercise.name}</b>
-                      <small>{exercise.sets.length}세트 · 최고 {formatNumber(Math.max(...exercise.sets.map((set) => set.weight)))}kg</small>
+          {draft.length > 0 ? (
+            <div className="draft-list">
+              {draft.map((exercise, exerciseIndex) => {
+                const max = exercise.sets.reduce((value, set) => Math.max(value, set.weight), 0);
+                return (
+                  <article className="exercise-entry" key={exercise.id}>
+                    <div className="exercise-head">
+                      <span>{pad(exerciseIndex + 1)}</span>
+                      <input
+                        value={exercise.name}
+                        onChange={(event) => updateExerciseName(exercise.id, event.target.value)}
+                        aria-label={`${exerciseIndex + 1}번째 운동 이름`}
+                      />
+                      <small>MAX {formatNumber(max)}kg</small>
+                      <button onClick={() => removeExercise(exercise.id)} aria-label={`${exercise.name} 삭제`}>×</button>
                     </div>
-                  ))}
-                </div>
-
-                <button className="primary-action" onClick={startWorkout}><span>처방 수락하고 시작</span><b>FIRST REP →</b></button>
-              </div>
-
-              <aside className="today-rail">
-                <div className="metric-card hero-metric">
-                  <span>FIRST REP DEADLINE</span>
-                  <strong>06:20</strong>
-                  <p>남은 시간 <b>04:12</b></p>
-                </div>
-                <div className="coach-note">
-                  <span>AI COACH · WHY</span>
-                  <p>스쿼트는 최근 두 세션에서 목표 반복을 모두 달성했습니다. 오늘 두 번째 세트부터 <b>+2.5kg</b>를 제안합니다.</p>
-                </div>
-                <div className="last-session">
-                  <div><span>LAST SESSION</span><small>7월 17일</small></div>
-                  <strong>10 sets</strong>
-                  <p>총 볼륨 {formatNumber(sessionVolume(seedHistory[0]))}kg</p>
-                  <ul>
-                    <li><span>백 스쿼트</span><b>57.5kg</b></li>
-                    <li><span>벤치 프레스</span><b>45kg</b></li>
-                    <li><span>케이블 로우</span><b>42.5kg</b></li>
-                  </ul>
-                </div>
-              </aside>
-            </div>
-          </section>
-        )}
-
-        {tab === "live" && (
-          <section className="page live-page">
-            <div className="live-header">
-              <div><span className="page-kicker">NOW TRAINING</span><h1>Morning Strength</h1></div>
-              <div className="live-totals">
-                <div><span>TIME</span><b>{elapsedLabel}</b></div>
-                <div><span>SETS</span><b>{activeStats.sets}</b></div>
-                <div><span>VOLUME</span><b>{formatNumber(activeStats.volume)}<small>kg</small></b></div>
-              </div>
-            </div>
-
-            <div className="live-grid">
-              <div className="exercise-stack">
-                {exercises.map((exercise, exerciseIndex) => {
-                  const completed = exercise.sets.filter((set) => set.done);
-                  const max = completed.reduce((value, set) => Math.max(value, set.weight), 0);
-                  const volume = completed.reduce((value, set) => value + set.weight * set.reps, 0);
-                  return (
-                    <article className="exercise-card" key={exercise.id}>
-                      <header>
-                        <div><span>EXERCISE {String(exerciseIndex + 1).padStart(2, "0")}</span><h2>{exercise.name}</h2></div>
-                        <div className="exercise-summary"><span>{completed.length}/{exercise.sets.length} SETS</span><b>MAX {formatNumber(max)}kg</b><small>VOL {formatNumber(volume)}kg</small></div>
-                      </header>
-                      <div className="set-table">
-                        <div className="set-row set-head"><span>SET</span><span>PREVIOUS</span><span>KG</span><span>REPS</span><span>DONE</span><span /></div>
-                        {exercise.sets.map((set, index) => (
-                          <div className={`set-row ${set.done ? "completed" : ""}`} key={set.id}>
-                            <b>{index + 1}</b>
-                            <span className="previous">{set.previous ?? "—"}</span>
-                            <input aria-label={`${exercise.name} ${index + 1}세트 중량`} type="number" inputMode="decimal" step="0.5" min="0" value={set.weight} onChange={(event) => updateSet(exercise.id, set.id, { weight: Number(event.target.value) })} />
-                            <input aria-label={`${exercise.name} ${index + 1}세트 반복`} type="number" inputMode="numeric" step="1" min="0" value={set.reps} onChange={(event) => updateSet(exercise.id, set.id, { reps: Number(event.target.value) })} />
-                            <button className="done-button" onClick={() => toggleSet(exercise.id, set)} aria-label={`${exercise.name} ${index + 1}세트 ${set.done ? "완료 취소" : "완료"}`}>{set.done ? "✓" : ""}</button>
-                            <button className="remove-button" onClick={() => removeSet(exercise.id, set.id)} aria-label={`${index + 1}세트 삭제`}>×</button>
-                          </div>
-                        ))}
+                    <div className="sets-head"><span>SET</span><span>KG</span><span>REPS</span><span /></div>
+                    {exercise.sets.map((set, setIndex) => (
+                      <div className="set-entry" key={set.id}>
+                        <b>{setIndex + 1}</b>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.5"
+                          inputMode="decimal"
+                          value={set.weight}
+                          onChange={(event) => updateSet(exercise.id, set.id, { weight: Number(event.target.value) })}
+                          aria-label={`${exercise.name} ${setIndex + 1}세트 중량`}
+                        />
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          inputMode="numeric"
+                          value={set.reps}
+                          onChange={(event) => updateSet(exercise.id, set.id, { reps: Number(event.target.value) })}
+                          aria-label={`${exercise.name} ${setIndex + 1}세트 반복`}
+                        />
+                        <button onClick={() => removeSet(exercise.id, set.id)} aria-label={`${setIndex + 1}세트 삭제`}>×</button>
                       </div>
-                      <button className="add-set" onClick={() => addSet(exercise.id)}>＋ 세트 추가</button>
-                    </article>
-                  );
-                })}
-                <form className="add-exercise" onSubmit={addExercise}>
-                  <input value={newExercise} onChange={(event) => setNewExercise(event.target.value)} placeholder="운동 이름 입력" aria-label="추가할 운동 이름" />
-                  <button type="submit">운동 추가</button>
-                </form>
-              </div>
-
-              <aside className="live-rail">
-                <div className={`rest-timer ${restSeconds > 0 ? "running" : ""}`}>
-                  <span>REST TIMER</span>
-                  <strong>{restLabel}</strong>
-                  <p>{restSeconds > 0 ? "호흡을 정리하고 다음 세트를 준비하세요." : "세트를 완료하면 90초가 시작됩니다."}</p>
-                  {restSeconds > 0 && <button onClick={() => setRestSeconds(0)}>건너뛰기</button>}
-                </div>
-                <div className="live-coach">
-                  <span>COACH SIGNAL</span>
-                  <h3>{activeStats.sets < 2 ? "첫 두 세트는 폼 우선." : "속도가 유지되면 계획대로."}</h3>
-                  <p>목표 RPE 7–8. 날카로운 통증이 있으면 즉시 중량을 낮추거나 세션을 중단하세요.</p>
-                </div>
-                <button className="finish-button" onClick={finishWorkout}><span>세션 종료</span><b>{activeStats.sets} SETS · {formatNumber(activeStats.volume)}kg</b></button>
-              </aside>
-            </div>
-          </section>
-        )}
-
-        {tab === "history" && (
-          <section className="page history-page">
-            <div className="page-title-row"><div><span className="page-kicker">TRAINING LEDGER</span><h1>숫자가 기억하게 한다.</h1></div><button onClick={startWorkout}>＋ 새 운동</button></div>
-            <div className="stat-grid">
-              <div><span>SESSIONS</span><strong>{allTimeStats.sessions}</strong><small>저장된 운동</small></div>
-              <div><span>TOTAL SETS</span><strong>{allTimeStats.sets}</strong><small>완료 세트</small></div>
-              <div><span>TOTAL VOLUME</span><strong>{formatNumber(allTimeStats.volume)}<i>kg</i></strong><small>중량 × 반복</small></div>
-              <div><span>HEAVIEST</span><strong>{formatNumber(allTimeStats.max)}<i>kg</i></strong><small>단일 세트 최고</small></div>
-            </div>
-
-            <div className="history-layout">
-              <div className="session-list">
-                <div className="section-title"><h2>세션 기록</h2><span>최근순</span></div>
-                {history.map((session) => (
-                  <article className="session-card" key={session.id}>
-                    <header>
-                      <div><span>{formatDate(session.date)}</span><h3>{session.title}</h3></div>
-                      <div><b>{session.durationMinutes}분</b><small>{sessionSets(session).length}세트 · {formatNumber(sessionVolume(session))}kg</small></div>
-                    </header>
-                    <div className="session-exercises">
-                      {session.exercises.map((exercise) => {
-                        const sets = exercise.sets.filter((set) => set.done);
-                        const max = sets.reduce((value, set) => Math.max(value, set.weight), 0);
-                        const volume = sets.reduce((value, set) => value + set.weight * set.reps, 0);
-                        return (
-                          <div key={exercise.id}>
-                            <div className="exercise-line"><b>{exercise.name}</b><span>{sets.length}세트</span><strong>최고 {formatNumber(max)}kg</strong><small>{formatNumber(volume)}kg volume</small></div>
-                            <p>{sets.map((set) => `${formatNumber(set.weight)} × ${set.reps}`).join("  ·  ")}</p>
-                          </div>
-                        );
-                      })}
-                    </div>
+                    ))}
+                    <button className="add-set-button" onClick={() => addSet(exercise.id)}>＋ 세트</button>
                   </article>
-                ))}
-              </div>
-
-              <aside className="records-panel">
-                <div className="section-title"><h2>운동별 기록</h2><span>ALL TIME</span></div>
-                {exerciseRecords.map((record) => (
-                  <div className="record-row" key={record.name}>
-                    <div><b>{record.name}</b><small>{record.sessions}회 · {record.sets}세트</small></div>
-                    <div><span>MAX</span><strong>{formatNumber(record.max)}kg</strong></div>
-                    <div><span>BEST SET</span><strong>{record.best}</strong></div>
-                    <div><span>VOLUME</span><strong>{formatNumber(record.volume)}kg</strong></div>
-                  </div>
-                ))}
-              </aside>
+                );
+              })}
             </div>
-          </section>
-        )}
-
-        {tab === "coach" && (
-          <section className="page coach-page">
-            <span className="page-kicker">WEEKLY REVIEW · AI COACH</span>
-            <h1>응원보다 근거.</h1>
-            <div className="coach-grid">
-              <article className="coach-hero">
-                <span>THIS WEEK</span>
-                <h2>하체는 증량,<br />상체는 한 주 더 유지.</h2>
-                <p>스쿼트는 최근 두 세션에서 계획 반복을 달성했고 세션 볼륨도 상승했습니다. 벤치 프레스는 마지막 세트 반복이 감소해 47.5kg 적응을 한 번 더 확인합니다.</p>
-                <div className="coach-actions"><button>다음 주 계획 보기</button><button className="ghost">기억 수정</button></div>
-              </article>
-              <div className="signal-list">
-                <div><span className="signal up">↑</span><p><b>백 스쿼트 +2.5kg</b><small>목표 반복 2회 연속 달성</small></p></div>
-                <div><span className="signal flat">→</span><p><b>벤치 프레스 유지</b><small>마지막 세트 반복 안정화 필요</small></p></div>
-                <div><span className="signal up">↑</span><p><b>First Rep 4분 단축</b><small>최근 평균 12분 → 8분</small></p></div>
-              </div>
+          ) : (
+            <div className="empty-editor">
+              <span>＋</span>
+              <h3>이날의 첫 운동</h3>
+              <p>운동 이름을 입력하면 바로 세트를 기록할 수 있어요.</p>
             </div>
-            <div className="memory-card">
-              <div><span>COACH MEMORY</span><h2>AI가 계획에 사용하는 사실</h2></div>
-              <ul><li>목표: 근력과 실행 일관성</li><li>주 3회 · 회당 35분</li><li>가용 장비: 바벨, 덤벨, 케이블</li><li>증량 기본폭: 상체 2.5kg / 하체 2.5–5kg</li><li>금지: 통증을 무시한 강행</li></ul>
-            </div>
-          </section>
-        )}
-      </main>
+          )}
 
-      <nav className="mobile-nav" aria-label="모바일 메뉴">
-        <button className={tab === "today" ? "active" : ""} onClick={() => setTab("today")}>오늘</button>
-        <button className={tab === "live" ? "active" : ""} onClick={() => setTab("live")}>기록</button>
-        <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>히스토리</button>
-        <button className={tab === "coach" ? "active" : ""} onClick={() => setTab("coach")}>코치</button>
-      </nav>
+          <form className="add-exercise" onSubmit={addExercise}>
+            <input
+              value={newExercise}
+              onChange={(event) => setNewExercise(event.target.value)}
+              placeholder="예: 백 스쿼트"
+              aria-label="추가할 운동 이름"
+            />
+            <button type="submit">추가</button>
+          </form>
+
+          <div className="draft-summary">
+            <span>{draftStats.sets} sets</span>
+            <span>{formatNumber(draftStats.volume)}kg volume</span>
+            <span>max {formatNumber(draftStats.max)}kg</span>
+          </div>
+
+          <div className="editor-actions">
+            {selectedSession && <button className="delete-button" onClick={deleteWorkout}>삭제</button>}
+            <button className="save-button" onClick={saveWorkout}>{selectedSession ? "기록 수정" : "운동 저장"}</button>
+          </div>
+        </aside>
+      </div>
+
       {toast && <div className="toast" role="status">{toast}</div>}
-    </div>
+    </main>
   );
 }
