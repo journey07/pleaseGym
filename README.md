@@ -1,4 +1,4 @@
-# FIRST REP
+# EVERYONE BUT YOU
 
 A minimal workout calendar, 06:00 decision bridge, and OpenAI-powered personal trainer.
 

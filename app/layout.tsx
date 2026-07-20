@@ -4,10 +4,10 @@ import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
   const incomingHeaders = await headers();
-  const host = incomingHeaders.get("host") ?? "first-rep-site.vercel.app";
+  const host = incomingHeaders.get("host") ?? "please-gym.vercel.app";
   const protocol = host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https";
   const origin = `${protocol}://${host}`;
-  const title = "FIRST REP — Workout Calendar";
+  const title = "EVERYONE BUT YOU — Workout Calendar";
   const description = "날짜를 고르고 운동·세트·중량·반복을 기록하는 미니멀 AI 운동 캘린더.";
 
   return {
@@ -20,7 +20,7 @@ export async function generateMetadata(): Promise<Metadata> {
     openGraph: {
       title,
       description,
-      images: [{ url: `${origin}/og.png`, width: 1536, height: 1024, alt: "FIRST REP Workout Calendar" }],
+      images: [{ url: `${origin}/og.png`, width: 1536, height: 1024, alt: "EVERYONE BUT YOU Workout Calendar" }],
     },
     twitter: {
       card: "summary_large_image",

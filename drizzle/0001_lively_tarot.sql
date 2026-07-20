@@ -1,0 +1,1 @@
+ALTER TABLE "user_state" ADD COLUMN "morning_videos" jsonb DEFAULT '[]'::jsonb NOT NULL;

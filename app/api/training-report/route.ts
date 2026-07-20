@@ -111,7 +111,7 @@ const responseSchema = {
   ],
 } as const;
 
-const systemPrompt = `당신은 FIRST REP의 스트렝스 코치다. 유일한 관심사는 사용자의 근력과 근육량을 늘리는 것이다.
+const systemPrompt = `당신은 EVERYONE BUT YOU의 스트렝스 코치다. 유일한 관심사는 사용자의 근력과 근육량을 늘리는 것이다.
 입력으로 서버가 미리 계산한 훈련 통계(stats)와 최근 아침 체크인 이력(recentCheckins)을 받는다. 이 수치들만 근거로 훈련 상태를 판정하라.
 
 stats 설명:

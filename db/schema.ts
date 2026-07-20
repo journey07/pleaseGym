@@ -5,6 +5,7 @@ export const userState = pgTable("user_state", {
   workoutHistory: jsonb("workout_history").$type<unknown[]>().notNull().default([]),
   favorites: jsonb("favorites").$type<unknown[]>().notNull().default([]),
   coachMemory: jsonb("coach_memory").$type<unknown[]>().notNull().default([]),
+  morningVideos: jsonb("morning_videos").$type<unknown[]>().notNull().default([]),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

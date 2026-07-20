@@ -821,9 +821,20 @@ export default function Home() {
 
   if (!clientReady) {
     return (
-      <main className="hydration-shell" aria-label="FIRST REP 불러오는 중">
-        <span>1</span>
-        <b>FIRST REP</b>
+      <main className="hydration-shell" aria-label="EVERYONE BUT YOU 불러오는 중">
+        <svg
+          className="brand-mark"
+          viewBox="0 0 32 32"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path
+            fill="currentColor"
+            fillRule="evenodd"
+            d="M16.8 1.7c3.6 5.2 10.6 9 11.1 16.3.5 7-4.7 12-11.6 12-7 0-12.2-4.8-11.7-11.4.4-5.4 6.1-8.6 8.5-14.3 1.2 3.6 1.6 6.9-.2 9.8 3.4-1.8 6.6-6 3.9-12.4Zm-4.9 22.5c-1.8-2.7-1.1-5.6 1.7-7.6 2.5-1.8 4.7-3.1 5.5-5.8 2.5 5.1 2.5 10.6-1 13.7-2.1 1.8-4.8 1.6-6.2-.3Z"
+          />
+        </svg>
+        <b>EVERYONE BUT YOU</b>
       </main>
     );
   }
@@ -832,8 +843,19 @@ export default function Home() {
     <main className="app">
       <header className="site-header">
         <button className="wordmark" onClick={goToday} aria-label="오늘로 이동">
-          <span>1</span>
-          <b>FIRST REP</b>
+          <svg
+            className="brand-mark"
+            viewBox="0 0 32 32"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path
+              fill="currentColor"
+              fillRule="evenodd"
+              d="M16.8 1.7c3.6 5.2 10.6 9 11.1 16.3.5 7-4.7 12-11.6 12-7 0-12.2-4.8-11.7-11.4.4-5.4 6.1-8.6 8.5-14.3 1.2 3.6 1.6 6.9-.2 9.8 3.4-1.8 6.6-6 3.9-12.4Zm-4.9 22.5c-1.8-2.7-1.1-5.6 1.7-7.6 2.5-1.8 4.7-3.1 5.5-5.8 2.5 5.1 2.5 10.6-1 13.7-2.1 1.8-4.8 1.6-6.2-.3Z"
+            />
+          </svg>
+          <b>EVERYONE BUT YOU</b>
         </button>
         <p>운동을 기억하는 가장 단순한 방법.</p>
         <div className="header-actions">

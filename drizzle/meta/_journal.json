@@ -8,6 +8,13 @@
       "when": 1784462758771,
       "tag": "0000_curvy_proudstar",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1784540720673,
+      "tag": "0001_lively_tarot",
+      "breakpoints": true
     }
   ]
 }

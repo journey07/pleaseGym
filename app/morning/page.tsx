@@ -299,6 +299,7 @@ export default function MorningBridge() {
   const [skipHolding, setSkipHolding] = useState(false);
   const [videos, setVideos] = useState<MorningVideo[]>([]);
   const [videosLoaded, setVideosLoaded] = useState(false);
+  const [videosNeonReady, setVideosNeonReady] = useState(false);
   const [videoEditOpen, setVideoEditOpen] = useState(false);
   const [newVideoUrl, setNewVideoUrl] = useState("");
   const [newVideoTitle, setNewVideoTitle] = useState("");
@@ -347,6 +348,68 @@ export default function MorningBridge() {
     if (videosLoaded)
       window.localStorage.setItem(MORNING_VIDEOS_KEY, JSON.stringify(videos));
   }, [videos, videosLoaded]);
+
+  useEffect(() => {
+    if (!videosLoaded) return;
+    let cancelled = false;
+
+    const connectVideosToNeon = async () => {
+      try {
+        const response = await fetch("/api/morning-videos", {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const data = (await response.json()) as { videos?: unknown };
+        if (cancelled) return;
+
+        if (Array.isArray(data.videos) && data.videos.length > 0) {
+          const serverVideos = data.videos as MorningVideo[];
+          setVideos(serverVideos);
+          window.localStorage.setItem(
+            MORNING_VIDEOS_KEY,
+            JSON.stringify(serverVideos),
+          );
+          setVideosNeonReady(true);
+          return;
+        }
+
+        const localVideos = JSON.parse(
+          window.localStorage.getItem(MORNING_VIDEOS_KEY) ?? "[]",
+        ) as unknown;
+        if (Array.isArray(localVideos) && localVideos.length > 0) {
+          const importResponse = await fetch("/api/morning-videos", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ videos: localVideos }),
+          });
+          if (!cancelled && importResponse.ok) setVideosNeonReady(true);
+          return;
+        }
+
+        setVideosNeonReady(true);
+      } catch {
+        // Local storage remains the offline source when Neon is unavailable.
+      }
+    };
+
+    void connectVideosToNeon();
+    return () => {
+      cancelled = true;
+    };
+    // This runs once after the local video cache has been hydrated.
+  }, [videosLoaded]);
+
+  useEffect(() => {
+    if (!videosNeonReady) return;
+    const timer = window.setTimeout(() => {
+      void fetch("/api/morning-videos", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videos }),
+      });
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [videos, videosNeonReady]);
 
   useEffect(() => {
     if (!videoNotice) return;
@@ -561,8 +624,19 @@ export default function MorningBridge() {
       <section className="morning-card">
         <header className="morning-head">
           <Link href="/" aria-label="운동 달력으로 돌아가기">
-            <span>1</span>
-            <b>FIRST REP</b>
+            <svg
+              className="brand-mark"
+              viewBox="0 0 32 32"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path
+                fill="currentColor"
+                fillRule="evenodd"
+                d="M16.8 1.7c3.6 5.2 10.6 9 11.1 16.3.5 7-4.7 12-11.6 12-7 0-12.2-4.8-11.7-11.4.4-5.4 6.1-8.6 8.5-14.3 1.2 3.6 1.6 6.9-.2 9.8 3.4-1.8 6.6-6 3.9-12.4Zm-4.9 22.5c-1.8-2.7-1.1-5.6 1.7-7.6 2.5-1.8 4.7-3.1 5.5-5.8 2.5 5.1 2.5 10.6-1 13.7-2.1 1.8-4.8 1.6-6.2-.3Z"
+              />
+            </svg>
+            <b>EVERYONE BUT YOU</b>
           </Link>
           <p>{dateLabel || "오늘"}</p>
         </header>

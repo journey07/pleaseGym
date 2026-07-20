@@ -23,13 +23,14 @@ button, input, select { font: inherit; }
 button { color: inherit; }
 
 .hydration-shell { min-height: 100vh; display: grid; place-content: center; justify-items: center; gap: 12px; color: var(--ink); background: var(--paper); }
-.hydration-shell span { display: grid; place-items: center; width: 42px; height: 42px; color: white; background: var(--ink); border-radius: 50%; font: 800 18px/1 var(--font-geist-mono), monospace; }
+.brand-mark { display: block; flex: 0 0 auto; color: #FF4D24; }
+.hydration-shell .brand-mark { width: 40px; height: 40px; }
 .hydration-shell b { font-size: 12px; letter-spacing: .12em; }
 
 .app { width: min(1600px, 100%); min-height: 100vh; margin: 0 auto; padding: 0 34px 64px; }
 .site-header { height: 82px; display: flex; align-items: center; border-bottom: 1px solid var(--line); }
 .wordmark { display: flex; align-items: center; gap: 10px; padding: 0; background: transparent; border: 0; cursor: pointer; }
-.wordmark > span { display: grid; place-items: center; width: 27px; height: 27px; color: white; background: var(--ink); border-radius: 50%; font: 750 12px/1 var(--font-geist-mono), monospace; }
+.wordmark > .brand-mark { width: 26px; height: 26px; }
 .wordmark b { font-size: 13px; letter-spacing: .08em; }
 .site-header p { margin: 0 0 0 28px; color: var(--muted); font-size: 12px; }
 .header-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; }
@@ -38,11 +39,11 @@ button { color: inherit; }
 .morning-button { color: var(--accent); border-color: #efb4a5; font: 700 9px/1 var(--font-geist-mono), monospace; letter-spacing: .08em; }
 .morning-button:hover { background: var(--accent-soft); }
 
-.morning-page { min-height: 100vh; display: grid; place-items: center; padding: 28px; background: #0d0d0b; }
-.morning-card { width: min(900px, 100%); min-height: min(800px, calc(100vh - 56px)); display: flex; flex-direction: column; padding: clamp(24px, 5vw, 54px); background: #f6f6f1; border: 1px solid #3a3a36; overflow: hidden; }
+.morning-page { min-height: 100vh; background: var(--paper); }
+.morning-card { width: min(1600px, 100%); min-height: 100vh; display: flex; flex-direction: column; margin: 0 auto; padding: 0 34px 64px; }
 .morning-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 25px; border-bottom: 1px solid var(--line); }
 .morning-head a { display: flex; align-items: center; gap: 9px; color: var(--ink); text-decoration: none; }
-.morning-head a > span { display: grid; place-items: center; width: 26px; height: 26px; color: white; background: var(--ink); border-radius: 50%; font: 750 11px/1 var(--font-geist-mono), monospace; }
+.morning-head a > .brand-mark { width: 24px; height: 24px; }
 .morning-head b { font-size: 12px; letter-spacing: .08em; }
 .morning-head p { margin: 0; color: var(--muted); font-size: 11px; }
 .mission-hud { display: grid; grid-template-columns: auto 1fr auto; gap: 22px; align-items: center; padding: 17px 0; border-bottom: 1px solid var(--line); }
@@ -277,14 +278,14 @@ button { color: inherit; }
 .toast { position: fixed; z-index: 50; left: 50%; bottom: 28px; transform: translateX(-50%); padding: 12px 17px; color: white; background: var(--ink); box-shadow: 0 8px 30px #0002; font-size: 11px; }
 
 @media (max-width: 1050px) {
-  .app { padding: 0 24px 50px; }
+  .app, .morning-card { padding: 0 24px 50px; }
   .workspace { grid-template-columns: 1fr; }
   .editor-panel { position: static; }
   .draft-list { max-height: none; }
 }
 
 @media (max-width: 720px) {
-  .app { padding: 0 14px 36px; }
+  .app, .morning-card { padding: 0 14px 36px; }
   .site-header { height: 68px; }
   .site-header p { display: none; }
   .summary { grid-template-columns: repeat(3, 1fr); margin-top: 24px; }
@@ -308,8 +309,6 @@ button { color: inherit; }
   .day-lift b { display: block; font-size: 10px; }
   .day-lift strong { font-size: 10px; }
   .add-hint { display: none; }
-  .morning-page { padding: 0; }
-  .morning-card { min-height: 100vh; border: 0; }
   .mission-hud { grid-template-columns: 1fr auto; }
   .mission-progress { grid-column: 1 / -1; grid-row: 2; }
   .xp-total { grid-column: 2; grid-row: 1; }
@@ -325,7 +324,6 @@ button { color: inherit; }
   .exercise-entry { padding-inline: 15px; }
   .exercise-head { grid-template-columns: 21px minmax(0, 1fr) 26px 22px; }
   .exercise-head small { display: none; }
-  .morning-card { padding: 22px 18px 34px; }
   .morning-copy h1 { font-size: 45px; }
   .video-add { grid-template-columns: 1fr; }
   .video-add button { min-height: 40px; }
