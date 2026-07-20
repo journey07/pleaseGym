@@ -123,6 +123,27 @@ button { color: inherit; }
 .coach-actions > button:first-child, .coach-actions .primary { flex: 1; color: white; background: var(--ink); }
 .coach-actions .secondary { color: var(--muted); background: var(--paper); border: 1px solid var(--line); }
 @keyframes coach-pulse { to { transform: scale(1.6); opacity: .35; } }
+.video-section { margin-top: 13px; padding: 19px 20px; background: white; border: 1px solid var(--line); }
+.video-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.video-head > span { color: var(--accent); font: 700 9px/1 var(--font-geist-mono), monospace; letter-spacing: .12em; }
+.video-edit-toggle { padding: 6px 10px; color: var(--muted); background: var(--paper); border: 1px solid var(--line); font-size: 9px; font-weight: 700; cursor: pointer; }
+.video-edit-toggle:hover { color: var(--ink); background: var(--surface); }
+.video-hint { margin: 9px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.video-play { width: 100%; min-height: 46px; margin-top: 13px; color: white; background: var(--ink); border: 0; font-size: 11px; font-weight: 750; cursor: pointer; }
+.video-play:hover { background: #343430; }
+.video-list { margin-top: 13px; border-top: 1px solid var(--line); }
+.video-row { display: grid; grid-template-columns: minmax(0, 1fr) auto 22px; gap: 9px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--soft-line); }
+.video-row a { overflow: hidden; color: var(--ink); font-size: 12px; font-weight: 650; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.video-row a:hover { color: var(--accent); }
+.video-row small { color: #85857e; font: 650 8px/1 var(--font-geist-mono), monospace; }
+.video-row button { padding: 0; color: #a5a59f; background: transparent; border: 0; font-size: 16px; cursor: pointer; }
+.video-row button:hover { color: var(--accent); }
+.video-add { display: grid; grid-template-columns: minmax(0, 1fr) 120px auto; gap: 8px; margin-top: 12px; }
+.video-add input { min-width: 0; padding: 11px 12px; background: var(--paper); border: 1px solid transparent; outline: 0; font-size: 11px; }
+.video-add input:focus { background: white; border-color: var(--ink); }
+.video-add button { padding: 0 15px; color: white; background: var(--ink); border: 0; font-size: 10px; font-weight: 650; cursor: pointer; }
+.video-add button:hover { background: #343430; }
+.video-notice { display: block; margin-top: 11px; color: var(--accent); font-size: 10px; }
 
 .summary { display: grid; grid-template-columns: 120px 130px 150px minmax(270px, 1fr); gap: 0; margin: 38px 0 28px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .summary > div { min-height: 94px; padding: 18px 22px 16px 0; }
@@ -273,6 +294,8 @@ button { color: inherit; }
   .exercise-head small { display: none; }
   .morning-card { padding: 22px 18px 34px; }
   .morning-copy h1 { font-size: 45px; }
+  .video-add { grid-template-columns: 1fr; }
+  .video-add button { min-height: 40px; }
   .quest-objective strong { font-size: 17px; }
   .skip-gate { padding: 20px 16px; }
 }

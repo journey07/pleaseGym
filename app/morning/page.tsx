@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 type Decision = "go" | "no_go";
@@ -53,6 +53,44 @@ type MissionStats = {
   weekGoes: number;
   totalXp: number;
 };
+
+type MorningVideo = {
+  id: string;
+  title: string;
+  url: string;
+};
+
+const MORNING_VIDEOS_KEY = "first-rep-morning-videos";
+
+const normalizeVideoUrl = (raw: string) => {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const withProtocol = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  try {
+    const parsed = new URL(withProtocol);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+      return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+};
+
+const videoHost = (url: string) => {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+};
+
+const videoLabel = (video: MorningVideo) =>
+  video.title.trim() || videoHost(video.url);
+
+const pickRandomVideo = (videos: MorningVideo[]) =>
+  videos[Math.floor(Math.random() * videos.length)];
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 const pad = (value: number) => String(value).padStart(2, "0");
@@ -259,6 +297,12 @@ export default function MorningBridge() {
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipProgress, setSkipProgress] = useState(0);
   const [skipHolding, setSkipHolding] = useState(false);
+  const [videos, setVideos] = useState<MorningVideo[]>([]);
+  const [videosLoaded, setVideosLoaded] = useState(false);
+  const [videoEditOpen, setVideoEditOpen] = useState(false);
+  const [newVideoUrl, setNewVideoUrl] = useState("");
+  const [newVideoTitle, setNewVideoTitle] = useState("");
+  const [videoNotice, setVideoNotice] = useState("");
   const holdInterval = useRef<number | null>(null);
   const holdTimeout = useRef<number | null>(null);
 
@@ -289,6 +333,60 @@ export default function MorningBridge() {
       setStatus("done");
     }
   }, []);
+
+  useEffect(() => {
+    setVideos(
+      readArray<MorningVideo>(MORNING_VIDEOS_KEY).filter(
+        (video) => typeof video?.url === "string" && video.url.length > 0,
+      ),
+    );
+    setVideosLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (videosLoaded)
+      window.localStorage.setItem(MORNING_VIDEOS_KEY, JSON.stringify(videos));
+  }, [videos, videosLoaded]);
+
+  useEffect(() => {
+    if (!videoNotice) return;
+    const timer = window.setTimeout(() => setVideoNotice(""), 2600);
+    return () => window.clearTimeout(timer);
+  }, [videoNotice]);
+
+  const openRandomVideo = () => {
+    if (videos.length === 0) {
+      setVideoEditOpen(true);
+      setVideoNotice("먼저 아침 영상을 등록해주세요.");
+      return;
+    }
+    const pick = pickRandomVideo(videos);
+    window.open(pick.url, "_blank", "noopener,noreferrer");
+    setVideoNotice(`${videoLabel(pick)} 영상을 열었어요.`);
+  };
+
+  const addVideo = (event: FormEvent) => {
+    event.preventDefault();
+    const url = normalizeVideoUrl(newVideoUrl);
+    if (!url) {
+      setVideoNotice("올바른 영상 주소를 입력해주세요.");
+      return;
+    }
+    if (videos.some((video) => video.url === url)) {
+      setVideoNotice("이미 목록에 있는 영상이에요.");
+      return;
+    }
+    setVideos((current) => [
+      ...current,
+      { id: uid(), title: newVideoTitle.trim(), url },
+    ]);
+    setNewVideoUrl("");
+    setNewVideoTitle("");
+  };
+
+  const removeVideo = (videoId: string) => {
+    setVideos((current) => current.filter((video) => video.id !== videoId));
+  };
 
   const clearSkipHold = () => {
     if (holdInterval.current !== null)
@@ -343,6 +441,12 @@ export default function MorningBridge() {
       storeDecision(nextDecision);
       setTodayDecision(nextDecision);
       setMissionStats(calculateMissionStats());
+      // Must stay before the first await so the popup keeps its user-gesture pass.
+      if (nextDecision === "go" && videos.length > 0) {
+        const pick = pickRandomVideo(videos);
+        window.open(pick.url, "_blank", "noopener,noreferrer");
+        setVideoNotice(`오늘의 영상: ${videoLabel(pick)}`);
+      }
     }
 
     try {
@@ -660,6 +764,77 @@ export default function MorningBridge() {
             </div>
           </section>
         )}
+
+        <section className="video-section" aria-label="아침 영상 목록">
+          <div className="video-head">
+            <span>MORNING VIDEO</span>
+            <button
+              className="video-edit-toggle"
+              onClick={() => setVideoEditOpen((open) => !open)}
+            >
+              {videoEditOpen ? "편집 완료" : "목록 편집"}
+            </button>
+          </div>
+          <p className="video-hint">
+            {videos.length > 0
+              ? `퀘스트를 수락하면 ${videos.length}개 중 하나가 랜덤으로 열려요.`
+              : "아침에 볼 영상을 등록해두면 퀘스트 수락과 함께 랜덤으로 하나가 열려요."}
+          </p>
+
+          {videos.length > 0 && (
+            <button className="video-play" onClick={openRandomVideo}>
+              <span>▶ 랜덤 영상 지금 열기</span>
+            </button>
+          )}
+
+          {videoEditOpen && (
+            <>
+              {videos.length > 0 && (
+                <div className="video-list">
+                  {videos.map((video) => (
+                    <div className="video-row" key={video.id}>
+                      <a
+                        href={video.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {videoLabel(video)}
+                      </a>
+                      <small>{videoHost(video.url)}</small>
+                      <button
+                        onClick={() => removeVideo(video.id)}
+                        aria-label={`${videoLabel(video)} 영상 삭제`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <form className="video-add" onSubmit={addVideo}>
+                <input
+                  value={newVideoUrl}
+                  onChange={(event) => setNewVideoUrl(event.target.value)}
+                  placeholder="영상 주소 (예: youtube.com/watch?v=...)"
+                  aria-label="추가할 영상 주소"
+                />
+                <input
+                  value={newVideoTitle}
+                  onChange={(event) => setNewVideoTitle(event.target.value)}
+                  placeholder="제목 (선택)"
+                  aria-label="추가할 영상 제목"
+                />
+                <button type="submit">추가</button>
+              </form>
+            </>
+          )}
+
+          {videoNotice && (
+            <small className="video-notice" role="status">
+              {videoNotice}
+            </small>
+          )}
+        </section>
       </section>
     </main>
   );
