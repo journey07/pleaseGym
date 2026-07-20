@@ -41,6 +41,40 @@ type FavoriteExercise = {
   metric: "weight" | "distance";
 };
 
+type TrainingReport = {
+  headline: string;
+  overall: string;
+  frequencyComment: string;
+  liftAnalysis: Array<{
+    name: string;
+    trend: "up" | "flat" | "down" | "new";
+    comment: string;
+  }>;
+  actionItems: string[];
+  warning: string;
+};
+
+type TrainingStats = {
+  totalSessions: number;
+  sessionsLast7Days: number;
+  sessionsLast28Days: number;
+  perWeekLast4: number;
+};
+
+type TrainingReportCache = {
+  date: string;
+  report: TrainingReport;
+  stats: TrainingStats;
+};
+
+const REPORT_CACHE_KEY = "first-rep-training-report";
+
+const trendSymbol: Record<TrainingReport["liftAnalysis"][number]["trend"], string> =
+  { up: "↑", flat: "→", down: "↓", new: "＋" };
+
+const trendLabel: Record<TrainingReport["liftAnalysis"][number]["trend"], string> =
+  { up: "상승", flat: "정체", down: "하락", new: "신규" };
+
 const uid = () => Math.random().toString(36).slice(2, 9);
 const subscribeToHydration = () => () => undefined;
 const pad = (value: number) => String(value).padStart(2, "0");
@@ -236,6 +270,13 @@ export default function Home() {
   const [neonReady, setNeonReady] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [toast, setToast] = useState("");
+  const [report, setReport] = useState<TrainingReport | null>(null);
+  const [reportStats, setReportStats] = useState<TrainingStats | null>(null);
+  const [reportDate, setReportDate] = useState("");
+  const [reportStatus, setReportStatus] = useState<
+    "idle" | "loading" | "error"
+  >("idle");
+  const [reportError, setReportError] = useState("");
   const clientReady = useSyncExternalStore(
     subscribeToHydration,
     () => true,
@@ -395,6 +436,75 @@ export default function Home() {
     const timer = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(REPORT_CACHE_KEY);
+      if (!raw) return;
+      const cached = JSON.parse(raw) as TrainingReportCache;
+      if (cached?.report && typeof cached.date === "string") {
+        setReport(cached.report);
+        setReportStats(cached.stats ?? null);
+        setReportDate(cached.date);
+      }
+    } catch {
+      // A malformed cache just means the panel starts empty.
+    }
+  }, []);
+
+  const runReport = async () => {
+    if (reportStatus === "loading") return;
+    setReportStatus("loading");
+    setReportError("");
+    try {
+      const response = await fetch("/api/training-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Newest 90 sessions are plenty for trend analysis and keep the payload small.
+        body: JSON.stringify({
+          history: [...history]
+            .sort((a, b) => b.date.localeCompare(a.date))
+            .slice(0, 90),
+        }),
+      });
+      const data = (await response.json()) as {
+        report?: TrainingReport;
+        stats?: TrainingStats;
+        error?: string;
+        code?: string;
+      };
+      if (!response.ok || !data.report) {
+        const suffix =
+          data.code === "openai_not_configured"
+            ? " 서버에 OPENAI_API_KEY를 설정하면 활성화됩니다."
+            : "";
+        throw new Error(`${data.error ?? "분석에 실패했습니다."}${suffix}`);
+      }
+      setReport(data.report);
+      setReportStats(data.stats ?? null);
+      setReportDate(todayKey);
+      setReportStatus("idle");
+      try {
+        window.localStorage.setItem(
+          REPORT_CACHE_KEY,
+          JSON.stringify({
+            date: todayKey,
+            report: data.report,
+            stats: data.stats,
+          }),
+        );
+      } catch {
+        // Best-effort cache.
+      }
+    } catch (requestError) {
+      setReportError(
+        requestError instanceof Error
+          ? requestError.message
+          : "분석에 실패했습니다.",
+      );
+      setReportStatus("error");
+    }
+  };
 
   const calendarDays = useMemo(() => {
     const year = visibleMonth.getFullYear();
@@ -762,6 +872,95 @@ export default function Home() {
           <span>AI COACH</span>
           <p>{coachInsight}</p>
         </div>
+      </section>
+
+      <section className="report-panel" aria-label="AI 근력 분석">
+        <div className="report-head">
+          <div>
+            <span>STRENGTH REPORT</span>
+            <h2>
+              {report
+                ? report.headline
+                : "근력·근육량 관점의 훈련 진단"}
+            </h2>
+            {reportDate && report && (
+              <small>{reportDate} 기준 분석</small>
+            )}
+          </div>
+          <button
+            className="report-run"
+            onClick={runReport}
+            disabled={reportStatus === "loading"}
+          >
+            {reportStatus === "loading"
+              ? "분석 중…"
+              : report
+                ? "다시 분석"
+                : "AI 분석 실행"}
+          </button>
+        </div>
+
+        {reportStatus === "error" && (
+          <p className="report-error" role="alert">
+            {reportError}
+          </p>
+        )}
+
+        {!report && reportStatus !== "error" && (
+          <p className="report-empty">
+            기록 전체를 읽고 훈련 빈도·강도·종목별 추정 1RM 추이를 분석해
+            지금 잘 가고 있는지 판정합니다.
+          </p>
+        )}
+
+        {report && (
+          <div className="report-body">
+            <p className="report-overall">{report.overall}</p>
+
+            <div className="report-frequency">
+              <b>
+                주 {reportStats ? formatNumber(reportStats.perWeekLast4) : "-"}
+                회
+              </b>
+              <p>{report.frequencyComment}</p>
+            </div>
+
+            {report.liftAnalysis.length > 0 && (
+              <div className="report-lifts">
+                {report.liftAnalysis.map((lift) => (
+                  <div
+                    className={`report-lift trend-${lift.trend}`}
+                    key={lift.name}
+                  >
+                    <i aria-hidden="true">{trendSymbol[lift.trend]}</i>
+                    <div>
+                      <b>
+                        {lift.name}
+                        <small>{trendLabel[lift.trend]}</small>
+                      </b>
+                      <p>{lift.comment}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {report.actionItems.length > 0 && (
+              <div className="report-actions">
+                <span>NEXT 7 DAYS</span>
+                <ol>
+                  {report.actionItems.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
+            {report.warning && (
+              <small className="report-warning">{report.warning}</small>
+            )}
+          </div>
+        )}
       </section>
 
       <div className="workspace">
