@@ -354,6 +354,18 @@ export default function MorningBridge() {
     return () => window.clearTimeout(timer);
   }, [videoNotice]);
 
+  const launchVideo = (pick: MorningVideo, successNotice: string) => {
+    // A "noopener" feature string makes window.open return null even on success,
+    // which would break blocked-popup detection — sever the opener manually instead.
+    const opened = window.open(pick.url, "_blank");
+    if (opened) opened.opener = null;
+    setVideoNotice(
+      opened
+        ? successNotice
+        : "팝업이 차단되어 영상을 열지 못했어요. 목록에서 직접 눌러 열어주세요.",
+    );
+  };
+
   const openRandomVideo = () => {
     if (videos.length === 0) {
       setVideoEditOpen(true);
@@ -361,8 +373,7 @@ export default function MorningBridge() {
       return;
     }
     const pick = pickRandomVideo(videos);
-    window.open(pick.url, "_blank", "noopener,noreferrer");
-    setVideoNotice(`${videoLabel(pick)} 영상을 열었어요.`);
+    launchVideo(pick, `${videoLabel(pick)} 영상을 열었어요.`);
   };
 
   const addVideo = (event: FormEvent) => {
@@ -444,8 +455,7 @@ export default function MorningBridge() {
       // Must stay before the first await so the popup keeps its user-gesture pass.
       if (nextDecision === "go" && videos.length > 0) {
         const pick = pickRandomVideo(videos);
-        window.open(pick.url, "_blank", "noopener,noreferrer");
-        setVideoNotice(`오늘의 영상: ${videoLabel(pick)}`);
+        launchVideo(pick, `오늘의 영상: ${videoLabel(pick)}`);
       }
     }
 

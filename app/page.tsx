@@ -927,10 +927,10 @@ export default function Home() {
 
             {report.liftAnalysis.length > 0 && (
               <div className="report-lifts">
-                {report.liftAnalysis.map((lift) => (
+                {report.liftAnalysis.map((lift, liftIndex) => (
                   <div
                     className={`report-lift trend-${lift.trend}`}
-                    key={lift.name}
+                    key={`${lift.name}-${liftIndex}`}
                   >
                     <i aria-hidden="true">{trendSymbol[lift.trend]}</i>
                     <div>
@@ -949,8 +949,8 @@ export default function Home() {
               <div className="report-actions">
                 <span>NEXT 7 DAYS</span>
                 <ol>
-                  {report.actionItems.map((item) => (
-                    <li key={item}>{item}</li>
+                  {report.actionItems.map((item, itemIndex) => (
+                    <li key={`${item}-${itemIndex}`}>{item}</li>
                   ))}
                 </ol>
               </div>

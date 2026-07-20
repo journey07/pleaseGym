@@ -160,8 +160,9 @@ function buildStats(history: PostedSession[]): TrainingStats {
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  const last7Cutoff = shiftSeoulDateKey(-7);
-  const last28Cutoff = shiftSeoulDateKey(-28);
+  // Cutoffs are compared with >= and today counts, so -6/-27 give exact 7/28-day windows.
+  const last7Cutoff = shiftSeoulDateKey(-6);
+  const last28Cutoff = shiftSeoulDateKey(-27);
 
   const liftMap = new Map<string, Map<string, LiftPoint>>();
   const cardioMap = new Map<string, Map<string, number>>();
