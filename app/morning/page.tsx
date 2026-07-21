@@ -9,15 +9,6 @@ type CoachResult = {
   decision: Decision;
   headline: string;
   message: string;
-  planLabel: string;
-  exercises: Array<{
-    name: string;
-    metric: "weight" | "distance";
-    sets: number;
-    reps: number;
-    targetValue: number;
-    unit: "kg" | "km";
-  }>;
   nextAction: "start" | "minimum" | "rest";
   safetyNote: string;
   progressNote: string;
@@ -584,41 +575,6 @@ export default function MorningBridge() {
     }, 3000);
   };
 
-  const usePlan = () => {
-    if (!coach || coach.exercises.length === 0) return;
-    const exercises: StoredExercise[] = coach.exercises.map((exercise) => ({
-      id: uid(),
-      name: exercise.name,
-      metric: exercise.metric,
-      sets:
-        exercise.metric === "distance"
-          ? [
-              {
-                id: uid(),
-                weight: 0,
-                reps: 1,
-                done: true,
-                distanceKm: exercise.targetValue,
-              },
-            ]
-          : Array.from({ length: exercise.sets }, () => ({
-              id: uid(),
-              weight: exercise.targetValue,
-              reps: exercise.reps,
-              done: true,
-            })),
-    }));
-    window.localStorage.setItem(
-      "first-rep-coach-draft",
-      JSON.stringify({
-        date: todayKey(),
-        createdAt: new Date().toISOString(),
-        exercises,
-      }),
-    );
-    window.location.assign("/?coach=today");
-  };
-
   return (
     <main className="morning-page">
       <section className="morning-card">
@@ -801,23 +757,6 @@ export default function MorningBridge() {
             <h2>{coach.headline}</h2>
             <p>{coach.message}</p>
 
-            {coach.exercises.length > 0 && (
-              <div className="coach-plan">
-                <b>{coach.planLabel}</b>
-                {coach.exercises.map((exercise, index) => (
-                  <div key={`${exercise.name}-${index}`}>
-                    <span>{pad(index + 1)}</span>
-                    <strong>{exercise.name}</strong>
-                    <small>
-                      {exercise.metric === "distance"
-                        ? `${exercise.targetValue}km`
-                        : `${exercise.sets} × ${exercise.reps} · ${exercise.targetValue || "직접 입력"}kg`}
-                    </small>
-                  </div>
-                ))}
-              </div>
-            )}
-
             {coach.progressNote && (
               <p className="coach-progress">
                 <span>PROGRESS</span>
@@ -827,13 +766,9 @@ export default function MorningBridge() {
 
             <small className="safety-note">{coach.safetyNote}</small>
             <div className="coach-actions">
-              {coach.exercises.length > 0 ? (
-                <button onClick={usePlan}>이 계획으로 시작</button>
-              ) : (
-                <Link className="primary" href="/">
-                  오늘 결정 완료
-                </Link>
-              )}
+              <Link className="primary" href="/">
+                {coach.decision === "go" ? "운동 시작 →" : "오늘 결정 완료"}
+              </Link>
               <button
                 className="secondary"
                 onClick={() => {

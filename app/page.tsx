@@ -69,11 +69,15 @@ type TrainingReportCache = {
 
 const REPORT_CACHE_KEY = "first-rep-training-report";
 
-const trendSymbol: Record<TrainingReport["liftAnalysis"][number]["trend"], string> =
-  { up: "↑", flat: "→", down: "↓", new: "＋" };
+const trendSymbol: Record<
+  TrainingReport["liftAnalysis"][number]["trend"],
+  string
+> = { up: "↑", flat: "→", down: "↓", new: "＋" };
 
-const trendLabel: Record<TrainingReport["liftAnalysis"][number]["trend"], string> =
-  { up: "상승", flat: "정체", down: "하락", new: "신규" };
+const trendLabel: Record<
+  TrainingReport["liftAnalysis"][number]["trend"],
+  string
+> = { up: "상승", flat: "정체", down: "하락", new: "신규" };
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 const subscribeToHydration = () => () => undefined;
@@ -403,33 +407,12 @@ export default function Home() {
     setDirty(false);
   }, [selectedDate, selectedSession]);
 
+  // The morning coach no longer generates a plan to inject, so any lingering
+  // draft from an older build is cleared once (never applied) on load.
   useEffect(() => {
     if (!loaded) return;
-    const stored = window.localStorage.getItem("first-rep-coach-draft");
-    if (!stored) return;
-    try {
-      const pending = JSON.parse(stored) as {
-        date?: string;
-        exercises?: Exercise[];
-      };
-      if (pending.date !== todayKey || !Array.isArray(pending.exercises)) {
-        window.localStorage.removeItem("first-rep-coach-draft");
-        return;
-      }
-      if (sessionsByDate.has(todayKey)) {
-        setToast("오늘 기록이 이미 있어 AI 계획을 덮어쓰지 않았어요.");
-        window.localStorage.removeItem("first-rep-coach-draft");
-        return;
-      }
-      setSelectedDate(todayKey);
-      setDraft(pending.exercises);
-      setDirty(true);
-      setToast("AI의 오늘 계획을 운동 초안으로 불러왔어요.");
-      window.localStorage.removeItem("first-rep-coach-draft");
-    } catch {
-      window.localStorage.removeItem("first-rep-coach-draft");
-    }
-  }, [loaded, sessionsByDate, todayKey]);
+    window.localStorage.removeItem("first-rep-coach-draft");
+  }, [loaded]);
 
   useEffect(() => {
     if (!toast) return;
@@ -821,7 +804,10 @@ export default function Home() {
 
   if (!clientReady) {
     return (
-      <main className="hydration-shell" aria-label="EVERYONE BUT YOU 불러오는 중">
+      <main
+        className="hydration-shell"
+        aria-label="EVERYONE BUT YOU 불러오는 중"
+      >
         <svg
           className="brand-mark"
           viewBox="0 0 32 32"
@@ -900,14 +886,8 @@ export default function Home() {
         <div className="report-head">
           <div>
             <span>STRENGTH REPORT</span>
-            <h2>
-              {report
-                ? report.headline
-                : "근력·근육량 관점의 훈련 진단"}
-            </h2>
-            {reportDate && report && (
-              <small>{reportDate} 기준 분석</small>
-            )}
+            <h2>{report ? report.headline : "근력·근육량 관점의 훈련 진단"}</h2>
+            {reportDate && report && <small>{reportDate} 기준 분석</small>}
           </div>
           <button
             className="report-run"
@@ -930,8 +910,8 @@ export default function Home() {
 
         {!report && reportStatus !== "error" && (
           <p className="report-empty">
-            기록 전체를 읽고 훈련 빈도·강도·종목별 추정 1RM 추이를 분석해
-            지금 잘 가고 있는지 판정합니다.
+            기록 전체를 읽고 훈련 빈도·강도·종목별 추정 1RM 추이를 분석해 지금
+            잘 가고 있는지 판정합니다.
           </p>
         )}
 

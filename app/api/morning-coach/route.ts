@@ -12,15 +12,6 @@ type MorningCoachResponse = {
   decision: Decision;
   headline: string;
   message: string;
-  planLabel: string;
-  exercises: Array<{
-    name: string;
-    metric: "weight" | "distance";
-    sets: number;
-    reps: number;
-    targetValue: number;
-    unit: "kg" | "km";
-  }>;
   nextAction: "start" | "minimum" | "rest";
   safetyNote: string;
   progressNote: string;
@@ -50,24 +41,6 @@ const responseSchema = {
     decision: { type: "string", enum: ["go", "no_go"] },
     headline: { type: "string" },
     message: { type: "string" },
-    planLabel: { type: "string" },
-    exercises: {
-      type: "array",
-      maxItems: 4,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          name: { type: "string" },
-          metric: { type: "string", enum: ["weight", "distance"] },
-          sets: { type: "integer", minimum: 1, maximum: 4 },
-          reps: { type: "integer", minimum: 1, maximum: 30 },
-          targetValue: { type: "number", minimum: 0 },
-          unit: { type: "string", enum: ["kg", "km"] },
-        },
-        required: ["name", "metric", "sets", "reps", "targetValue", "unit"],
-      },
-    },
     nextAction: { type: "string", enum: ["start", "minimum", "rest"] },
     safetyNote: { type: "string" },
     progressNote: { type: "string" },
@@ -76,8 +49,6 @@ const responseSchema = {
     "decision",
     "headline",
     "message",
-    "planLabel",
-    "exercises",
     "nextAction",
     "safetyNote",
     "progressNote",
@@ -89,13 +60,13 @@ const systemPrompt = `당신은 EVERYONE BUT YOU의 아침 운동 코치다. 유
 
 규칙:
 - 한국어로 짧고 단호하지만 비난하지 않는다.
-- go라면 최근 기록에 실제로 등장한 운동 또는 즐겨찾기 운동만 사용한다.
-- 최근 기록이 부족하면 무게를 추측하지 말고 targetValue를 0으로 두어 현장에서 사용자가 입력하게 한다.
-- 점진적 과부하를 적용한다: 직전 기록에서 목표 반복을 모두 채운 운동은 소폭 증량(+2.5kg 이내) 또는 반복 +1을 제안하고, 채우지 못했으면 같은 무게를 유지시킨다.
+- 운동 계획이나 운동 목록을 만들지 않는다. headline, message, nextAction, safetyNote, progressNote로 조언만 한다.
+- go라면 최근 기록에 실제로 등장한 운동 또는 즐겨찾기 운동을 조언의 근거로만 사용한다.
+- 최근 기록이 부족하면 무게를 추측하지 말고, 현장에서 사용자가 적절한 강도를 정하라고 조언한다.
+- 점진적 과부하 조언은 message 또는 progressNote 문장 안에서만 말로 전한다. 직전 기록에서 목표 반복을 모두 채웠다면 예를 들어 “저번보다 2.5kg 올려보라” 또는 “반복을 1회 늘려보라”고 조언하고, 채우지 못했다면 같은 무게를 유지하라고 한다.
 - 한 번에 최근 최고중량의 5%를 넘는 증량을 권하지 않는다. 최대중량(1RM) 실측 테스트를 권하지 않는다.
-- 같은 운동만 반복 중이면 message에서 한 문장으로 짚는다. 단, 새 운동을 계획에 넣지는 않는다.
-- 운동은 최대 4개, 세트는 운동당 최대 4세트다.
-- no_go라면 죄책감을 주지 않는다. 운동 계획을 만들지 말고 exercises는 빈 배열로 둔다.
+- 같은 운동만 반복 중이면 message에서 한 문장으로 짚는다.
+- no_go라면 죄책감을 주지 않고 조언만 한다.
 - no_go의 nextAction은 minimum 또는 rest 중 하나다. minimum은 5분 이하의 가벼운 행동만 의미한다.
 - 통증을 진단하거나 치료하지 않는다. 위험하거나 날카로운 통증이 있으면 운동 중단과 전문가 상담을 안내한다.
 - headline은 18자 이내, message는 두 문장 이내, safetyNote는 한 문장 이내로 쓴다.
@@ -147,8 +118,6 @@ const isMorningCoachResponse = (
     (candidate.decision === "go" || candidate.decision === "no_go") &&
     typeof candidate.headline === "string" &&
     typeof candidate.message === "string" &&
-    typeof candidate.planLabel === "string" &&
-    Array.isArray(candidate.exercises) &&
     (candidate.nextAction === "start" ||
       candidate.nextAction === "minimum" ||
       candidate.nextAction === "rest") &&

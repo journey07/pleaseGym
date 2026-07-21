@@ -110,12 +110,6 @@ button { color: inherit; }
 .coach-result-head i { color: var(--muted); font: 650 9px/1 var(--font-geist-mono), monospace; font-style: normal; text-transform: uppercase; }
 .coach-result h2 { margin: 15px 0 6px; font-size: 23px; letter-spacing: -.035em; }
 .coach-result > p { margin: 0; color: #5d5d57; font-size: 12px; line-height: 1.55; }
-.coach-plan { margin-top: 19px; border-top: 1px solid var(--line); }
-.coach-plan > b { display: block; padding: 13px 0 8px; color: var(--muted); font: 650 9px/1 var(--font-geist-mono), monospace; }
-.coach-plan > div { display: grid; grid-template-columns: 27px 1fr auto; gap: 9px; align-items: center; padding: 9px 0; border-top: 1px solid var(--soft-line); }
-.coach-plan span { color: var(--muted); font: 650 9px/1 var(--font-geist-mono), monospace; }
-.coach-plan strong { font-size: 12px; }
-.coach-plan small { color: #30302d; font: 700 10px/1 var(--font-geist-mono), monospace; }
 .coach-progress { margin-top: 15px; padding-top: 13px; border-top: 1px solid var(--soft-line); color: #5d5d57; font-size: 11px; line-height: 1.55; }
 .coach-progress span { display: block; margin-bottom: 5px; color: var(--accent); font: 700 9px/1 var(--font-geist-mono), monospace; letter-spacing: .12em; }
 .safety-note { display: block; margin-top: 15px; color: #8a8a82; font-size: 9px; line-height: 1.5; }
