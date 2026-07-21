@@ -164,6 +164,7 @@ button { color: inherit; }
 .report-overall { max-width: 700px; margin: 16px 0 0; color: #3c3c37; font-size: 13px; line-height: 1.65; }
 .report-frequency { display: flex; align-items: baseline; gap: 14px; margin-top: 16px; padding: 14px 16px; background: #fafaf7; border: 1px solid var(--soft-line); }
 .report-frequency b { flex: 0 0 auto; color: #050505; font: 820 22px/1 var(--font-geist-mono), monospace; letter-spacing: -.05em; }
+.report-frequency-tag { display: block; margin-top: 6px; color: var(--muted); font: 700 9px/1 var(--font-geist-mono), monospace; letter-spacing: 0; font-style: normal; white-space: nowrap; }
 .report-frequency p { margin: 0; color: #55554f; font-size: 12px; line-height: 1.55; }
 .report-lifts { display: grid; gap: 0; margin-top: 14px; }
 .report-lift { display: flex; gap: 13px; padding: 12px 2px; border-bottom: 1px solid var(--soft-line); }

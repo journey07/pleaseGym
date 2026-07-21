@@ -50,7 +50,8 @@ type TrainingStats = {
   lastDate: string | null;
   sessionsLast7Days: number;
   sessionsLast28Days: number;
-  perWeekLast4: number;
+  trackingDays: number;
+  perWeekRecent: number;
   lifts: LiftSeries[];
   cardio: DistanceSeries[];
 };
@@ -111,22 +112,23 @@ const responseSchema = {
   ],
 } as const;
 
-const systemPrompt = `당신은 EVERYONE BUT YOU의 스트렝스 코치다. 유일한 관심사는 사용자의 근력과 근육량을 늘리는 것이다.
-입력으로 서버가 미리 계산한 훈련 통계(stats)와 최근 아침 체크인 이력(recentCheckins)을 받는다. 이 수치들만 근거로 훈련 상태를 판정하라.
+const systemPrompt = `당신은 EVERYONE BUT YOU의 불꽃 스파르타 스트렝스 코치다. 에너지를 폭발시켜 사용자의 근력과 근육량을 끌어올린다.
+입력으로 서버가 미리 계산한 훈련 통계(stats)와 최근 아침 체크인 이력(recentCheckins)을 받는다. 이 데이터만 근거로 훈련 상태를 정확히 판정하고, 사용자의 실제 기록을 반드시 콕 집어 개인화하라.
 
 stats 설명:
-- perWeekLast4: 최근 4주 평균 주당 세션 수. sessionsLast7Days/28Days도 참고.
+- perWeekRecent: 실제 추적 기간(trackingDays) 기준 주당 세션 수. sessionsLast7Days/28Days도 참고한다.
+- trackingDays: 추적 시작(firstDate) 후 경과일이며 최대 28이다. 표본이 어린지 판단하는 데 사용한다.
 - lifts[].points: 날짜별 최고 세트(topWeight×repsAtTop), 추정 1RM(e1rm, Epley), 그 날의 총볼륨(volume=Σ중량×반복). 시간순 정렬.
 - cardio[].points: 날짜별 유산소 거리(km).
 
 판정 규칙:
-- 빈도: 근성장 기준으로 주 3회 이상이면 좋음, 주 2회는 유지 최소선, 주 1회 이하는 성장에 부족하다고 명확히 말한다.
+- 빈도: trackingDays가 14일 미만이면 빈도 낙제 판정을 절대 하지 않는다. "아직 페이스를 단정하긴 이르고, 첫 주 페이스를 쌓는 중"이라고 격려하며 perWeekRecent는 참고 수치로만 언급한다. trackingDays가 14일 이상일 때만 근성장 기준으로 주 3회 이상은 좋음, 주 2회는 유지 최소선, 주 1회 이하는 성장에 부족하다고 판정한다.
 - 종목별 trend: e1rm 흐름이 최근에 올라가면 up, 2~3주 이상 같은 수준이면 flat(정체), 내려가면 down, 데이터가 2회 이하면 new. 수치를 지어내지 말고 points에 있는 값만 인용한다.
 - 정체(flat)나 하락(down)에는 반드시 구체 처방을 단다: 다음 세션에 +2.5kg 또는 반복 +1, 세트 추가, 해당 부위 빈도 증가 중 하나.
 - 볼륨이 빈도와 함께 늘고 있는지 언급한다. 상승 중이면 무엇이 효과를 내는지 짚는다.
 - actionItems: 다음 7일 안에 실행 가능한 구체 행동만, 최대 3개. "열심히 하기" 같은 추상 조언 금지.
 - 최대중량(1RM) 실측 테스트를 권하지 않는다. 통증 진단·치료를 하지 않는다. 무리한 증량(한 번에 5% 초과)을 권하지 않는다.
-- 어조: 한국어, 짧고 단호, 데이터 기반, 비난 없이. headline은 24자 이내 핵심 판정. overall은 세 문장 이내.
+- 어조: 한국어로 짧고 단호하게, "가자", "쥐어짜", "챔피언"처럼 불을 붙이는 스파르타 코치 톤을 쓴다. 비아냥이나 모욕은 금지하며 동기를 끌어올린다. "벤치 정체 3주째—이번엔 +2.5kg 쥐어짜!"처럼 실제 종목·기간·중량·빈도 중 관찰된 사실을 최소 한 조각 정확히 인용한다. headline은 24자 이내 핵심 판정, overall은 세 문장 이내로 쓴다.
 - 데이터가 적으면(세션 4회 미만) 판정을 유보하고 데이터를 쌓는 법을 안내한다.
 - warning: 안전상 주의가 필요할 때 한 문장, 없으면 빈 문자열.`;
 
@@ -253,16 +255,27 @@ function buildStats(history: PostedSession[]): TrainingStats {
   const sessionsLast28Days = sessions.filter(
     (session) => session.date >= last28Cutoff,
   ).length;
+  const firstDate = sessions[0]?.date ?? null;
+  const daysBetween = (from: string, to: string) =>
+    Math.floor(
+      (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
+        86_400_000,
+    );
+  const trackingDays = firstDate
+    ? Math.min(28, Math.max(0, daysBetween(firstDate, dateKeyInSeoul())) + 1)
+    : 0;
+  const effectiveWeeks = Math.max(1, trackingDays / 7);
 
   return {
     totalSessions: sessions.length,
-    firstDate: sessions[0]?.date ?? null,
+    firstDate,
     lastDate: sessions.at(-1)?.date ?? null,
     sessionsLast7Days: sessions.filter(
       (session) => session.date >= last7Cutoff,
     ).length,
     sessionsLast28Days,
-    perWeekLast4: round1(sessionsLast28Days / 4),
+    trackingDays,
+    perWeekRecent: round1(sessionsLast28Days / effectiveWeeks),
     lifts,
     cardio,
   };

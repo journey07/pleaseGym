@@ -58,7 +58,8 @@ type TrainingStats = {
   totalSessions: number;
   sessionsLast7Days: number;
   sessionsLast28Days: number;
-  perWeekLast4: number;
+  trackingDays: number;
+  perWeekRecent: number;
 };
 
 type TrainingReportCache = {
@@ -921,8 +922,11 @@ export default function Home() {
 
             <div className="report-frequency">
               <b>
-                주 {reportStats ? formatNumber(reportStats.perWeekLast4) : "-"}
+                주 {reportStats ? formatNumber(reportStats.perWeekRecent) : "-"}
                 회
+                {reportStats && reportStats.trackingDays < 14 && (
+                  <em className="report-frequency-tag">첫 주 페이스</em>
+                )}
               </b>
               <p>{report.frequencyComment}</p>
             </div>
