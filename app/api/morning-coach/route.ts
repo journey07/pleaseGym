@@ -3,6 +3,10 @@ import { NextResponse } from "next/server";
 import { getDb, isDatabaseConfigured } from "@/db";
 import { morningEvents, userState } from "@/db/schema";
 
+// Always run per-request: the GET returns today's decision from the DB, which must
+// never be statically cached (parity with app/api/morning-videos/route.ts).
+export const dynamic = "force-dynamic";
+
 // The coach model is fixed in code (not an env var) so every environment uses the same one.
 const OPENAI_MODEL = "gpt-5.6-luna";
 
@@ -347,6 +351,22 @@ async function generateCoachPlan(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function GET() {
+  if (!isDatabaseConfigured()) {
+    return NextResponse.json({ code: "not_configured", decision: null });
+  }
+  const existing = await getTodayMorningEvent();
+  if (!existing) {
+    return NextResponse.json({ decision: null, date: dateKeyInSeoul() });
+  }
+  return NextResponse.json({
+    decision: existing.decision,
+    coach: existing.coachPlan,
+    model: existing.model ?? OPENAI_MODEL,
+    date: dateKeyInSeoul(),
+  });
 }
 
 export async function POST(request: Request) {

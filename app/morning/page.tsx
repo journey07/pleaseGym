@@ -297,6 +297,9 @@ export default function MorningBridge() {
   const [videoNotice, setVideoNotice] = useState("");
   const holdInterval = useRef<number | null>(null);
   const holdTimeout = useRef<number | null>(null);
+  // Set once the user acts on today's decision so a slower in-flight server
+  // hydration can't clobber the fresh local choice with a stale server value.
+  const userActedRef = useRef(false);
 
   useEffect(() => {
     setDateLabel(
@@ -324,6 +327,54 @@ export default function MorningBridge() {
       setCoach(cached.coach);
       setStatus("done");
     }
+  }, []);
+
+  // Cross-device sync: the server (Neon morning_events) is the source of truth for
+  // today's decision. localStorage above only covers this device, so a decision made
+  // on another device wouldn't show here without this server hydration.
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrateDecisionFromServer = async () => {
+      try {
+        const response = await fetch("/api/morning-coach", {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const data = (await response.json()) as {
+          decision?: Decision | null;
+          coach?: CoachResult | null;
+          date?: string;
+        };
+        if (cancelled) return;
+        // If the user already committed a decision on this device while the GET
+        // was in flight, don't let the (possibly stale) server value overwrite it.
+        if (userActedRef.current) return;
+        if (data.decision !== "go" && data.decision !== "no_go") return;
+
+        setTodayDecision(data.decision);
+        storeDecision(data.decision); // mirror into local so streak/idempotency stay consistent
+        setMissionStats(calculateMissionStats());
+
+        if (data.coach) {
+          setDecision(data.decision);
+          setCoach(data.coach);
+          setStatus("done");
+          writeCoachResultCache({
+            date: data.date ?? todayKey(),
+            decision: data.decision,
+            coach: data.coach,
+          });
+        }
+      } catch {
+        // Offline → the localStorage restore above remains the source.
+      }
+    };
+
+    void hydrateDecisionFromServer();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -475,6 +526,7 @@ export default function MorningBridge() {
 
   const choose = async (nextDecision: Decision) => {
     if (status === "loading") return;
+    userActedRef.current = true;
 
     // Re-selecting the same decision that already has a coached plan → render the cache, no re-POST.
     if (nextDecision === todayDecision) {

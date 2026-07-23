@@ -2,12 +2,69 @@
 
 import {
   FormEvent,
+  ReactNode,
   useEffect,
   useMemo,
   useState,
   useSyncExternalStore,
 } from "react";
 import Link from "next/link";
+import {
+  DndContext,
+  DragEndEvent,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+
+type SortableRenderProps = {
+  setNodeRef: (node: HTMLElement | null) => void;
+  style: React.CSSProperties;
+  handleProps: Record<string, unknown>;
+  isDragging: boolean;
+};
+
+function SortableExercise({
+  id,
+  children,
+}: {
+  id: string;
+  children: (props: SortableRenderProps) => ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 2 : undefined,
+  };
+  return (
+    <>
+      {children({
+        setNodeRef,
+        style,
+        handleProps: { ...attributes, ...listeners },
+        isDragging,
+      })}
+    </>
+  );
+}
 
 type WorkoutSet = {
   id: string;
@@ -19,12 +76,188 @@ type WorkoutSet = {
   inheritReps?: boolean;
 };
 
+type BodyPart =
+  "가슴" | "등" | "어깨" | "허벅지" | "종아리" | "복근" | "허리" | "기타";
+
+type Metric = "weight" | "distance" | "bodyweight";
+
 type Exercise = {
   id: string;
   name: string;
-  metric?: "weight" | "distance";
+  // "bodyweight": reps는 주 지표, weight 필드는 추가중량(+kg, 기본 0)으로 재사용.
+  metric?: Metric;
   sets: WorkoutSet[];
+  bodyPart?: BodyPart;
+  bodyPartManual?: boolean;
 };
+
+type BodyGroup = "upper" | "lower" | "cardio" | "neutral";
+
+// 달력 색 구분: 상체(빨강)/하체(파랑)/유산소(보라)/중립(회색).
+const bodyGroup = (exercise: Exercise): BodyGroup => {
+  if (exercise.metric === "distance") return "cardio";
+  const part = exercise.bodyPart ?? inferBodyPart(exercise.name);
+  if (part === "허벅지" || part === "종아리") return "lower";
+  if (part === "기타") return "neutral";
+  return "upper"; // 가슴·등·어깨·복근·허리
+};
+
+const BODY_PARTS: BodyPart[] = [
+  "가슴",
+  "등",
+  "어깨",
+  "허벅지",
+  "종아리",
+  "복근",
+  "허리",
+  "기타",
+];
+
+// first-hit 순서 중요: 일반 토큰(프레스/레이즈/익스텐션)이 앞 부위에서
+// 오분류되지 않도록 구체적 부위를 먼저, 일반 토큰(어깨)을 마지막에 둔다.
+const BODY_PART_KEYWORDS: { part: BodyPart; keywords: string[] }[] = [
+  {
+    part: "복근",
+    keywords: [
+      "복근",
+      "코어",
+      "크런치",
+      "싯업",
+      "윗몸",
+      "플랭크",
+      "레그레이즈",
+      "레그 레이즈",
+      "행잉",
+      "abs",
+      "ab ",
+      "crunch",
+      "plank",
+      "situp",
+      "leg raise",
+      "hanging leg",
+    ],
+  },
+  { part: "종아리", keywords: ["종아리", "카프", "calf"] },
+  {
+    part: "허리",
+    keywords: [
+      "허리",
+      "굿모닝",
+      "척추기립근",
+      "기립근",
+      "하이퍼익스텐션",
+      "하이퍼 익스텐션",
+      "백 익스텐션",
+      "백익스텐션",
+      "lower back",
+    ],
+  },
+  {
+    part: "허벅지",
+    keywords: [
+      "스쿼트",
+      "런지",
+      "레그프레스",
+      "레그 프레스",
+      "레그컬",
+      "레그 컬",
+      "레그익스텐션",
+      "레그 익스텐션",
+      "대퇴",
+      "쿼드",
+      "햄스트링",
+      "허벅지",
+      "타이",
+      "어덕션",
+      "앱덕션",
+      "내전",
+      "외전",
+      "squat",
+      "lunge",
+      "leg press",
+      "leg curl",
+      "leg extension",
+      "adduction",
+      "abduction",
+    ],
+  },
+  {
+    part: "등",
+    keywords: [
+      "데드",
+      "풀업",
+      "친업",
+      "턱걸이",
+      "랫",
+      "로우",
+      "로잉",
+      "등",
+      "백로우",
+      "deadlift",
+      "pull-up",
+      "pullup",
+      "pulldown",
+      "lat pull",
+      "latpull",
+      "row",
+    ],
+  },
+  {
+    part: "가슴",
+    keywords: [
+      "벤치",
+      "체스트",
+      "가슴",
+      "딥스",
+      "펙",
+      "플라이",
+      "푸시업",
+      "푸쉬업",
+      "푸시 업",
+      "chest",
+      "bench",
+      "dip",
+      "push-up",
+      "pushup",
+      "fly",
+    ],
+  },
+  {
+    part: "어깨",
+    keywords: [
+      "숄더",
+      "오버헤드",
+      "ohp",
+      "밀리터리",
+      "아놀드",
+      "델트",
+      "레이즈",
+      "어깨",
+      "shoulder",
+      "overhead",
+      "raise",
+      "press",
+    ],
+  },
+];
+
+const inferBodyPart = (name: string): BodyPart => {
+  const normalized = name.trim().toLocaleLowerCase("ko-KR");
+  if (!normalized) return "기타";
+  for (const { part, keywords } of BODY_PART_KEYWORDS) {
+    if (
+      keywords.some((keyword) =>
+        normalized.includes(keyword.toLocaleLowerCase("ko-KR")),
+      )
+    ) {
+      return part;
+    }
+  }
+  return "기타";
+};
+
+const exerciseBodyPart = (exercise: Exercise): BodyPart =>
+  exercise.bodyPart ?? inferBodyPart(exercise.name);
 
 type Session = {
   id: string;
@@ -38,7 +271,7 @@ type Session = {
 type FavoriteExercise = {
   id: string;
   name: string;
-  metric: "weight" | "distance";
+  metric: Metric;
 };
 
 type TrainingReport = {
@@ -234,14 +467,13 @@ const createDefaultWeightSets = (): WorkoutSet[] =>
     inheritWeight: index > 0,
     inheritReps: index > 0,
   }));
-const createExercise = (
-  name: string,
-  metric: "weight" | "distance",
-): Exercise => ({
+const createExercise = (name: string, metric: Metric): Exercise => ({
   id: uid(),
   name,
   metric,
   sets: metric === "distance" ? [blankDistance()] : createDefaultWeightSets(),
+  bodyPart: inferBodyPart(name),
+  bodyPartManual: false,
 });
 const prepareSetForSave = (set: WorkoutSet): WorkoutSet => {
   const persisted = { ...set, done: true };
@@ -267,7 +499,7 @@ export default function Home() {
   const [history, setHistory] = useState<Session[]>(seedHistory);
   const [draft, setDraft] = useState<Exercise[]>([]);
   const [newExercise, setNewExercise] = useState("");
-  const [newMetric, setNewMetric] = useState<"weight" | "distance">("weight");
+  const [newMetric, setNewMetric] = useState<Metric>("weight");
   const [favorites, setFavorites] =
     useState<FavoriteExercise[]>(defaultFavorites);
   const [loaded, setLoaded] = useState(false);
@@ -525,16 +757,24 @@ export default function Home() {
   }, [monthSessions]);
 
   const draftStats = useMemo(() => {
-    const sets = draft
-      .filter((exercise) => exercise.metric !== "distance")
+    const weightSets = draft
+      .filter(
+        (exercise) =>
+          exercise.metric !== "distance" && exercise.metric !== "bodyweight",
+      )
+      .flatMap((exercise) => exercise.sets);
+    const bodyweightSets = draft
+      .filter((exercise) => exercise.metric === "bodyweight")
       .flatMap((exercise) => exercise.sets);
     const distanceSets = draft
       .filter((exercise) => exercise.metric === "distance")
       .flatMap((exercise) => exercise.sets);
     return {
-      sets: sets.length,
-      volume: sets.reduce((sum, set) => sum + set.weight * set.reps, 0),
-      max: sets.reduce((value, set) => Math.max(value, set.weight), 0),
+      sets: weightSets.length + bodyweightSets.length,
+      volume: weightSets.reduce((sum, set) => sum + set.weight * set.reps, 0),
+      max: weightSets.reduce((value, set) => Math.max(value, set.weight), 0),
+      hasWeight: weightSets.length > 0,
+      reps: bodyweightSets.reduce((sum, set) => sum + set.reps, 0),
       distance: distanceSets.reduce(
         (sum, set) => sum + (set.distanceKm ?? 0),
         0,
@@ -577,7 +817,7 @@ export default function Home() {
     setSelectedDate(todayKey);
   };
 
-  const addExerciseToDraft = (name: string, metric: "weight" | "distance") => {
+  const addExerciseToDraft = (name: string, metric: Metric) => {
     const trimmedName = name.trim();
     if (!trimmedName) return false;
     const normalizedName = normalizeExerciseName(trimmedName);
@@ -644,7 +884,26 @@ export default function Home() {
   const updateExerciseName = (exerciseId: string, name: string) => {
     setDraft((current) =>
       current.map((exercise) =>
-        exercise.id === exerciseId ? { ...exercise, name } : exercise,
+        exercise.id === exerciseId
+          ? {
+              ...exercise,
+              name,
+              ...(exercise.bodyPartManual
+                ? {}
+                : { bodyPart: inferBodyPart(name) }),
+            }
+          : exercise,
+      ),
+    );
+    setDirty(true);
+  };
+
+  const setExerciseBodyPart = (exerciseId: string, part: BodyPart) => {
+    setDraft((current) =>
+      current.map((exercise) =>
+        exercise.id === exerciseId
+          ? { ...exercise, bodyPart: part, bodyPartManual: true }
+          : exercise,
       ),
     );
     setDirty(true);
@@ -682,6 +941,10 @@ export default function Home() {
         const editedIndex = exercise.sets.findIndex((set) => set.id === setId);
         if (editedIndex < 0) return exercise;
 
+        // Propagate to later sets, but stop each field's chain at the first
+        // manually-pinned set — sets below a pin follow that pin, not the edit.
+        let weightLive = patch.weight !== undefined;
+        let repsLive = patch.reps !== undefined;
         const sets = exercise.sets.map((set, setIndex) => {
           if (setIndex === editedIndex) {
             return {
@@ -695,16 +958,17 @@ export default function Home() {
                 : {}),
             };
           }
-          if (editedIndex !== 0) return set;
-          return {
-            ...set,
-            ...(patch.weight !== undefined && set.inheritWeight
-              ? { weight: patch.weight }
-              : {}),
-            ...(patch.reps !== undefined && set.inheritReps
-              ? { reps: patch.reps }
-              : {}),
-          };
+          if (setIndex < editedIndex) return set;
+          let next = set;
+          if (weightLive) {
+            if (set.inheritWeight) next = { ...next, weight: patch.weight! };
+            else weightLive = false;
+          }
+          if (repsLive) {
+            if (set.inheritReps) next = { ...next, reps: patch.reps! };
+            else repsLive = false;
+          }
+          return next;
         });
 
         return { ...exercise, sets };
@@ -731,6 +995,27 @@ export default function Home() {
     setDraft((current) =>
       current.filter((exercise) => exercise.id !== exerciseId),
     );
+    setDirty(true);
+  };
+
+  const dragSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  const handleReorderExercises = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setDraft((current) => {
+      const oldIndex = current.findIndex((item) => item.id === active.id);
+      const newIndex = current.findIndex((item) => item.id === over.id);
+      if (oldIndex < 0 || newIndex < 0) return current;
+      return arrayMove(current, oldIndex, newIndex);
+    });
     setDirty(true);
   };
 
@@ -1011,6 +1296,7 @@ export default function Home() {
                 ? session.exercises.map((exercise) => {
                     const sets = exercise.sets.filter((set) => set.done);
                     const isDistance = exercise.metric === "distance";
+                    const isBodyweight = exercise.metric === "bodyweight";
                     return {
                       id: exercise.id,
                       name: exercise.name,
@@ -1019,11 +1305,17 @@ export default function Home() {
                             (sum, set) => sum + (set.distanceKm ?? 0),
                             0,
                           )
-                        : sets.reduce(
-                            (value, set) => Math.max(value, set.weight),
-                            0,
-                          ),
-                      unit: isDistance ? "km" : "kg",
+                        : isBodyweight
+                          ? sets.reduce(
+                              (value, set) => Math.max(value, set.reps),
+                              0,
+                            )
+                          : sets.reduce(
+                              (value, set) => Math.max(value, set.weight),
+                              0,
+                            ),
+                      unit: isDistance ? "km" : isBodyweight ? "회" : "kg",
+                      group: bodyGroup(exercise),
                     };
                   })
                 : [];
@@ -1048,7 +1340,10 @@ export default function Home() {
                   {session ? (
                     <span className="day-workout">
                       {dayRecords.map((record) => (
-                        <span className="day-lift" key={record.id}>
+                        <span
+                          className={`day-lift ${record.group}`}
+                          key={record.id}
+                        >
                           <b>{record.name}</b>
                           <strong>
                             {formatNumber(record.value)}
@@ -1076,127 +1371,195 @@ export default function Home() {
           </div>
 
           {draft.length > 0 ? (
-            <div className="draft-list">
-              {draft.map((exercise, exerciseIndex) => {
-                const isDistance = exercise.metric === "distance";
-                const max = exercise.sets.reduce(
-                  (value, set) => Math.max(value, set.weight),
-                  0,
-                );
-                const distance = exercise.sets.reduce(
-                  (sum, set) => sum + (set.distanceKm ?? 0),
-                  0,
-                );
-                return (
-                  <article className="exercise-entry" key={exercise.id}>
-                    <div className="exercise-head">
-                      <span>{pad(exerciseIndex + 1)}</span>
-                      <input
-                        value={exercise.name}
-                        onChange={(event) =>
-                          updateExerciseName(exercise.id, event.target.value)
-                        }
-                        aria-label={`${exerciseIndex + 1}번째 운동 이름`}
-                      />
-                      <small>
-                        {isDistance
-                          ? `${formatNumber(distance)}km`
-                          : `MAX ${formatNumber(max)}kg`}
-                      </small>
-                      <button
-                        className={`favorite-toggle ${isFavorite(exercise) ? "active" : ""}`}
-                        onClick={() => toggleFavorite(exercise)}
-                        aria-label={`${exercise.name} 즐겨찾기 ${isFavorite(exercise) ? "해제" : "등록"}`}
-                        title={
-                          isFavorite(exercise)
-                            ? "즐겨찾기 해제"
-                            : "즐겨찾기 등록"
-                        }
-                      >
-                        {isFavorite(exercise) ? "★" : "☆"}
-                      </button>
-                      <button
-                        onClick={() => removeExercise(exercise.id)}
-                        aria-label={`${exercise.name} 삭제`}
-                      >
-                        ×
-                      </button>
-                    </div>
-                    {isDistance ? (
-                      <div className="distance-entry">
-                        <span>DISTANCE</span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.1"
-                          inputMode="decimal"
-                          value={exercise.sets[0]?.distanceKm ?? 0}
-                          onChange={(event) =>
-                            updateSet(exercise.id, exercise.sets[0].id, {
-                              distanceKm: Number(event.target.value),
-                            })
-                          }
-                          aria-label={`${exercise.name} 거리`}
-                        />
-                        <b>km</b>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="sets-head">
-                          <span>SET</span>
-                          <span>KG</span>
-                          <span>REPS</span>
-                          <span />
-                        </div>
-                        {exercise.sets.map((set, setIndex) => (
-                          <div className="set-entry" key={set.id}>
-                            <b>{setIndex + 1}</b>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.5"
-                              inputMode="decimal"
-                              value={set.weight}
-                              onChange={(event) =>
-                                updateSet(exercise.id, set.id, {
-                                  weight: Number(event.target.value),
-                                })
-                              }
-                              aria-label={`${exercise.name} ${setIndex + 1}세트 중량`}
-                            />
-                            <input
-                              type="number"
-                              min="1"
-                              step="1"
-                              inputMode="numeric"
-                              value={set.reps}
-                              onChange={(event) =>
-                                updateSet(exercise.id, set.id, {
-                                  reps: Number(event.target.value),
-                                })
-                              }
-                              aria-label={`${exercise.name} ${setIndex + 1}세트 반복`}
-                            />
-                            <button
-                              onClick={() => removeSet(exercise.id, set.id)}
-                              aria-label={`${setIndex + 1}세트 삭제`}
+            <DndContext
+              sensors={dragSensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleReorderExercises}
+            >
+              <SortableContext
+                items={draft.map((exercise) => exercise.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="draft-list">
+                  {draft.map((exercise, exerciseIndex) => {
+                    const isDistance = exercise.metric === "distance";
+                    const isBodyweight = exercise.metric === "bodyweight";
+                    const max = exercise.sets.reduce(
+                      (value, set) => Math.max(value, set.weight),
+                      0,
+                    );
+                    const maxReps = exercise.sets.reduce(
+                      (value, set) => Math.max(value, set.reps),
+                      0,
+                    );
+                    const distance = exercise.sets.reduce(
+                      (sum, set) => sum + (set.distanceKm ?? 0),
+                      0,
+                    );
+                    return (
+                      <SortableExercise id={exercise.id} key={exercise.id}>
+                        {({ setNodeRef, style, handleProps, isDragging }) => (
+                          <article
+                            ref={setNodeRef}
+                            style={style}
+                            className={`exercise-entry ${isDragging ? "dragging" : ""}`}
+                          >
+                            <div className="exercise-head">
+                              <button
+                                type="button"
+                                className="drag-handle"
+                                aria-label={`${exercise.name} 순서 이동`}
+                                {...handleProps}
+                              >
+                                ⠿
+                              </button>
+                              <span>{pad(exerciseIndex + 1)}</span>
+                              <input
+                                value={exercise.name}
+                                onChange={(event) =>
+                                  updateExerciseName(
+                                    exercise.id,
+                                    event.target.value,
+                                  )
+                                }
+                                aria-label={`${exerciseIndex + 1}번째 운동 이름`}
+                              />
+                              <small>
+                                {isDistance
+                                  ? `${formatNumber(distance)}km`
+                                  : isBodyweight
+                                    ? `MAX ${formatNumber(maxReps)}회`
+                                    : `MAX ${formatNumber(max)}kg`}
+                              </small>
+                              <button
+                                className={`favorite-toggle ${isFavorite(exercise) ? "active" : ""}`}
+                                onClick={() => toggleFavorite(exercise)}
+                                aria-label={`${exercise.name} 즐겨찾기 ${isFavorite(exercise) ? "해제" : "등록"}`}
+                                title={
+                                  isFavorite(exercise)
+                                    ? "즐겨찾기 해제"
+                                    : "즐겨찾기 등록"
+                                }
+                              >
+                                {isFavorite(exercise) ? "★" : "☆"}
+                              </button>
+                              <button
+                                onClick={() => removeExercise(exercise.id)}
+                                aria-label={`${exercise.name} 삭제`}
+                              >
+                                ×
+                              </button>
+                            </div>
+                            <div
+                              className="bodypart-row"
+                              role="group"
+                              aria-label={`${exercise.name} 부위`}
                             >
-                              ×
-                            </button>
-                          </div>
-                        ))}
-                        <button
-                          className="add-set-button"
-                          onClick={() => addSet(exercise.id)}
-                        >
-                          ＋ 세트
-                        </button>
-                      </>
-                    )}
-                  </article>
-                );
-              })}
-            </div>
+                              {BODY_PARTS.map((part) => (
+                                <button
+                                  key={part}
+                                  type="button"
+                                  className={`bodypart-chip ${
+                                    exerciseBodyPart(exercise) === part
+                                      ? "active"
+                                      : ""
+                                  }`}
+                                  onClick={() =>
+                                    setExerciseBodyPart(exercise.id, part)
+                                  }
+                                  aria-pressed={
+                                    exerciseBodyPart(exercise) === part
+                                  }
+                                >
+                                  {part}
+                                </button>
+                              ))}
+                            </div>
+                            {isDistance ? (
+                              <div className="distance-entry">
+                                <span>DISTANCE</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.1"
+                                  inputMode="decimal"
+                                  value={exercise.sets[0]?.distanceKm ?? 0}
+                                  onChange={(event) =>
+                                    updateSet(
+                                      exercise.id,
+                                      exercise.sets[0].id,
+                                      {
+                                        distanceKm: Number(event.target.value),
+                                      },
+                                    )
+                                  }
+                                  aria-label={`${exercise.name} 거리`}
+                                />
+                                <b>km</b>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="sets-head">
+                                  <span>SET</span>
+                                  <span>{isBodyweight ? "＋KG" : "KG"}</span>
+                                  <span>REPS</span>
+                                  <span />
+                                </div>
+                                {exercise.sets.map((set, setIndex) => (
+                                  <div className="set-entry" key={set.id}>
+                                    <b>{setIndex + 1}</b>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="0.5"
+                                      inputMode="decimal"
+                                      value={set.weight}
+                                      onChange={(event) =>
+                                        updateSet(exercise.id, set.id, {
+                                          weight: Number(event.target.value),
+                                        })
+                                      }
+                                      aria-label={`${exercise.name} ${setIndex + 1}세트 ${isBodyweight ? "추가중량" : "중량"}`}
+                                    />
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      step="1"
+                                      inputMode="numeric"
+                                      value={set.reps}
+                                      onChange={(event) =>
+                                        updateSet(exercise.id, set.id, {
+                                          reps: Number(event.target.value),
+                                        })
+                                      }
+                                      aria-label={`${exercise.name} ${setIndex + 1}세트 반복`}
+                                    />
+                                    <button
+                                      onClick={() =>
+                                        removeSet(exercise.id, set.id)
+                                      }
+                                      aria-label={`${setIndex + 1}세트 삭제`}
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                ))}
+                                <button
+                                  className="add-set-button"
+                                  onClick={() => addSet(exercise.id)}
+                                >
+                                  ＋ 세트
+                                </button>
+                              </>
+                            )}
+                          </article>
+                        )}
+                      </SortableExercise>
+                    );
+                  })}
+                </div>
+              </SortableContext>
+            </DndContext>
           ) : (
             <div className="empty-editor">
               <span>＋</span>
@@ -1224,7 +1587,11 @@ export default function Home() {
                       <span>★</span>
                       <b>{favorite.name}</b>
                       <small>
-                        {favorite.metric === "distance" ? "km" : "kg"}
+                        {favorite.metric === "distance"
+                          ? "km"
+                          : favorite.metric === "bodyweight"
+                            ? "회"
+                            : "kg"}
                       </small>
                     </button>
                     <button
@@ -1245,19 +1612,22 @@ export default function Home() {
           <form className="add-exercise" onSubmit={addExercise}>
             <select
               value={newMetric}
-              onChange={(event) =>
-                setNewMetric(event.target.value as "weight" | "distance")
-              }
+              onChange={(event) => setNewMetric(event.target.value as Metric)}
               aria-label="운동 기록 방식"
             >
               <option value="weight">중량</option>
+              <option value="bodyweight">맨몸</option>
               <option value="distance">거리</option>
             </select>
             <input
               value={newExercise}
               onChange={(event) => setNewExercise(event.target.value)}
               placeholder={
-                newMetric === "distance" ? "예: 달리기" : "예: 백 스쿼트"
+                newMetric === "distance"
+                  ? "예: 달리기"
+                  : newMetric === "bodyweight"
+                    ? "예: 풀업"
+                    : "예: 백 스쿼트"
               }
               aria-label="추가할 운동 이름"
             />
@@ -1266,8 +1636,15 @@ export default function Home() {
 
           <div className="draft-summary">
             <span>{draftStats.sets} sets</span>
-            <span>{formatNumber(draftStats.volume)}kg volume</span>
-            <span>max {formatNumber(draftStats.max)}kg</span>
+            {draftStats.hasWeight && (
+              <span>{formatNumber(draftStats.volume)}kg volume</span>
+            )}
+            {draftStats.hasWeight && (
+              <span>max {formatNumber(draftStats.max)}kg</span>
+            )}
+            {draftStats.reps > 0 && (
+              <span>{formatNumber(draftStats.reps)}회</span>
+            )}
             {draftStats.distance > 0 && (
               <span>{formatNumber(draftStats.distance)}km</span>
             )}
