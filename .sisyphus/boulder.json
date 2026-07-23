@@ -1,6 +1,6 @@
 {
   "name": "llm-quality",
-  "phase": "execute",
-  "status": "T2-extract-bodypart",
+  "phase": "done",
+  "status": "T1-T5 implemented + pushed; live LLM verify pending prod key",
   "order": ["T2","T1","T3","T4","T5","T6"]
 }
