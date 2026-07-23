@@ -1,5 +1,6 @@
 {
-  "name": "morning-checkin-llm",
-  "phase": "done",
-  "status": "verified"
+  "name": "llm-quality",
+  "phase": "execute",
+  "status": "T2-extract-bodypart",
+  "order": ["T2","T1","T3","T4","T5","T6"]
 }
