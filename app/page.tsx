@@ -77,7 +77,15 @@ type WorkoutSet = {
 };
 
 type BodyPart =
-  "가슴" | "등" | "어깨" | "허벅지" | "종아리" | "복근" | "허리" | "기타";
+  | "가슴"
+  | "등"
+  | "어깨"
+  | "팔"
+  | "허벅지"
+  | "종아리"
+  | "복근"
+  | "허리"
+  | "기타";
 
 type Metric = "weight" | "distance" | "bodyweight";
 
@@ -99,13 +107,14 @@ const bodyGroup = (exercise: Exercise): BodyGroup => {
   const part = exercise.bodyPart ?? inferBodyPart(exercise.name);
   if (part === "허벅지" || part === "종아리") return "lower";
   if (part === "기타") return "neutral";
-  return "upper"; // 가슴·등·어깨·복근·허리
+  return "upper"; // 가슴·등·어깨·팔·복근·허리
 };
 
 const BODY_PARTS: BodyPart[] = [
   "가슴",
   "등",
   "어깨",
+  "팔",
   "허벅지",
   "종아리",
   "복근",
@@ -179,6 +188,30 @@ const BODY_PART_KEYWORDS: { part: BodyPart; keywords: string[] }[] = [
       "leg extension",
       "adduction",
       "abduction",
+    ],
+  },
+  {
+    // 허벅지 뒤에 둬서 "레그컬/레그 컬"은 허벅지로, 나머지 "컬"은 팔로 간다.
+    part: "팔",
+    keywords: [
+      "이두",
+      "삼두",
+      "바이셉",
+      "트라이셉",
+      "컬",
+      "킥백",
+      "프리처",
+      "해머",
+      "팔",
+      "전완",
+      "리스트",
+      "bicep",
+      "tricep",
+      "curl",
+      "kickback",
+      "pushdown",
+      "푸시다운",
+      "푸쉬다운",
     ],
   },
   {
