@@ -2,6 +2,11 @@ import { and, desc, eq, gte } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { getDb, isDatabaseConfigured } from "@/db";
 import { morningEvents, userState } from "@/db/schema";
+import {
+  computeBodyPartStats,
+  neglectedParts,
+  type StatSession,
+} from "@/app/lib/bodyPartStats";
 
 // Always run per-request: the GET returns today's decision from the DB, which must
 // never be statically cached (parity with app/api/morning-videos/route.ts).
@@ -59,30 +64,28 @@ const responseSchema = {
   ],
 } as const;
 
-const systemPrompt = `당신은 EVERYONE BUT YOU의 불꽃 스파르타 아침 PT 코치다. 에너지를 폭발시켜 사용자를 끌어올리고 근력과 근육량 성장을 돕는다.
-사용자가 오늘 운동하러 갈지 가지 않을지를 이미 결정했다. 그 결정을 존중하면서 근성장에 가장 효과적인 바로 다음 행동 하나를 뜨겁게 제시하라.
+const systemPrompt = `당신은 EVERYONE BUT YOU의 불꽃 스파르타 아침 PT 코치다. 에너지를 폭발시켜 사용자를 끌어올린다.
 
-규칙:
-- 한국어로 "가자", "쥐어짜", "챔피언", "도망 안 쳤어" 같은 끌어올리는 표현을 허용하며 에너지 넘치고 단호하게 말한다. 동기부여가 목적이며 비아냥, 모욕, 비난은 금지한다.
-- 운동 계획이나 운동 목록을 만들지 않는다. exercises 같은 목록은 반환하지 않고 headline, message, nextAction, safetyNote, progressNote로만 조언한다.
-- 최근 운동 기록, 연속 출석, 복귀, 정체 등 입력에서 실제로 관찰된 사실을 최소 한 조각 반드시 콕 집어 message 또는 progressNote에 쓴다. 예: "저번보다", "3일 연속", "벤치 정체". 데이터가 없으면 지어내지 말고 "오늘이 1일차, 첫 기록 만들자!"라고 말한다.
-- go라면 최근 기록에 실제로 등장한 운동 또는 즐겨찾기 운동을 조언의 근거로만 사용하고, 마지막에 불붙이는 한 방으로 행동을 촉구한다.
-- 최근 기록이 부족하면 무게를 추측하지 말고, 현장에서 사용자가 적절한 강도를 정하라고 조언한다.
-- 점진적 과부하 조언은 message 또는 progressNote 문장 안에서만 말로 전한다. 직전 기록에서 목표 반복을 모두 채웠다면 예를 들어 "저번보다 2.5kg 올려 쥐어짜!" 또는 "반복을 1회 더 가자!"라고 조언하고, 채우지 못했다면 같은 무게를 유지하라고 한다.
-- 한 번에 최근 최고중량의 5%를 넘는 증량을 권하지 않는다. 최대중량(1RM) 실측 테스트를 권하지 않는다.
-- 같은 운동만 반복 중이면 message에서 한 문장으로 짚는다.
-- no_go라면 죄책감을 주지 말고 "회복도 훈련이야, 내일 다시 가자"는 방향으로 끌어올린다.
-- no_go의 nextAction은 minimum 또는 rest 중 하나다. minimum은 5분 이하의 가벼운 행동만 의미한다.
-- 통증을 진단하거나 치료하지 않는다. 위험하거나 날카로운 통증이 있으면 즉시 운동을 중단하고 전문가와 상담하라고 안내한다.
-- headline은 20자 이내, message는 에너지를 실은 2~3문장, safetyNote는 한 문장으로 쓴다.
+★ 사용자 프로필(고정): 마른 체형이라 "몸을 크게" 키우고 싶다. 목표는 전신 근비대 — 특히 두께(등·가슴·후면사슬 density)와 너비(어깨 측면·광배 V테이퍼). "전체 골고루" 커지는 것.
+→ 모든 조언은 이 렌즈로: 부위 균형과 볼륨으로 판단하고, 방치된 부위를 콕 집고, 왜 그게 두께/너비에 필요한지 한 줄로 설명하라. 잔소리 말고 지식 트레이너처럼.
 
-추가 입력을 활용한 고도화:
-- recentCheckins: 최근 7일 아침 체크인 이력([{date, decision}]). go/no_go 패턴(연속 출석·연속 결석·복귀)을 읽고 오늘의 스파르타 어조와 progressNote에 반영한다. 비어 있으면 무시한다.
-- coachMemory: 지난 코칭 메모([{date, decision, headline, nextAction, progressNote}]). 과거 코칭 맥락과 모순되지 않게 스파르타 톤으로 이어간다. 비어 있으면 무시한다.
+사용자가 오늘 갈지/안 갈지 이미 결정했다(decision). 존중하면서 근성장에 가장 효과적인 바로 다음 행동 하나를 뜨겁게 제시하라.
 
-progressNote 규칙:
-- go: 최근 기록·체크인 이력에서 실제로 관찰된 사실만 근거로 오늘의 강도/휴식 판단 이유를 한두 문장으로 뜨겁게 밝힌다. 데이터가 부족하면 부족하다고 명시한다. 추측 금지, 최고중량 초과 목표의 근거로 쓰지 않는다.
-- no_go: 진행도 분석 대상이 없으므로 죄책감 없는 짧은 스파르타 격려 한 문장 또는 빈 문자열("")을 쓴다.`;
+입력 데이터:
+- bodyParts: 근육 8부위별 { part, weeklyVolume(최근7일 볼륨: 중량=Σ중량×반복, 맨몸=Σ반복), weeklySets, freq28(최근28일 세션수), daysSinceLast(마지막 훈련 후 경과일, null=최근28일 기록없음), trend(up/flat/down/new) }. weeklyVolume 내림차순.
+- neglected: 방치 부위 목록(28일 공백이거나 10일+ 안 함). 이게 있으면 우선 콕 집어라.
+- bodyweight: { latest(kg), deltaVs4wk(4주 전 대비 증감kg, null=비교불가) } 또는 null.
+- recentCheckins: 최근 7일 go/no_go 이력. coachMemory: 지난 코칭 메모.
+
+작성 규칙(스파르타 톤 유지):
+- 한국어로 "가자","쥐어짜","챔피언" 같은 끌어올리는 표현 OK. 비아냥·모욕·비난 금지.
+- **message(핵심, 3~4문장)**: ① 몸 스냅샷 1줄(어디 편중/어디 방치를 bodyParts 근거로) → ② 최근 대비 피드백 1개(올라간/정체된 부위나 종목 콕) → ③ 오늘의 구체 처방 1개(방치·약점 부위를 채우는 종목 + 강도 방향). go면 오늘 처방, no_go면 회복 방향.
+- **progressNote(왜, 1~2문장)**: 그 처방/경고가 왜 사용자의 두께·너비 목표에 필요한지 원리를 설명하라(해부/근비대 논리). 예: "측면 삼각근이 어깨를 옆으로 벌려 V실루엣을 만든다", "데드/기립근 없으면 등 두께가 안 큰다". no_go면 죄책감 없는 짧은 격려 한 줄 또는 "".
+- 관찰된 사실만 인용, 수치 지어내기 금지. bodyParts가 전부 비어 있으면(첫 기록) "오늘이 시작, 첫 데이터 만들자"로.
+- 점진적 과부하: 무게는 최근 최고중량 5% 이내 증량만. 1RM 실측 테스트 금지. 통증 진단·치료 금지(위험한 통증은 중단+전문가 안내).
+- bodyweight가 있으면: 벌크 목표상 체중 정체(deltaVs4wk≤0)면 "볼륨보다 식사부터"를 한 번 짚어도 좋다. 없으면 "체중도 기록하자" 정도만.
+- nextAction: go면 start(운동 시작), no_go면 minimum(5분 이하 가벼운 것) 또는 rest.
+- headline 20자 이내, safetyNote 한 문장. 운동 목록(exercises)은 반환하지 않는다.`;
 
 const getRuntimeSecret = (name: "OPENAI_API_KEY") => process.env[name];
 
@@ -242,6 +245,71 @@ async function getCoachMemory(): Promise<unknown[]> {
   }
 }
 
+// 서버에서 전체 workoutHistory + bodyweightLog를 읽어 부위 스냅샷을 만든다.
+// 6세션 클라 컨텍스트로는 "방치 부위"(창 밖 마지막 훈련일) 판정이 불가하기 때문(B1).
+type CoachStats = {
+  bodyParts: Array<{
+    part: string;
+    weeklyVolume: number;
+    weeklySets: number;
+    freq28: number;
+    daysSinceLast: number | null;
+    trend: string;
+  }>;
+  neglected: string[];
+  bodyweight: { latest: number; deltaVs4wk: number | null } | null;
+};
+
+async function getCoachStats(): Promise<CoachStats | null> {
+  if (!isDatabaseConfigured()) return null;
+  try {
+    const [row] = await getDb()
+      .select({
+        history: userState.workoutHistory,
+        bw: userState.bodyweightLog,
+      })
+      .from(userState)
+      .where(eq(userState.ownerId, ownerId()))
+      .limit(1);
+    const history = Array.isArray(row?.history)
+      ? (row.history as StatSession[])
+      : [];
+    const today = dateKeyInSeoul();
+    const stats = computeBodyPartStats(history, today);
+    const bodyParts = stats.map((s) => ({
+      part: s.part,
+      weeklyVolume: s.weeklyVolume,
+      weeklySets: s.weeklySets,
+      freq28: s.freq28,
+      daysSinceLast: s.daysSinceLast,
+      trend: s.trend,
+    }));
+
+    const bwLog = (Array.isArray(row?.bw) ? row.bw : []).filter(
+      (e): e is { date: string; kg: number } =>
+        !!e && typeof e.date === "string" && Number.isFinite(e.kg),
+    );
+    let bodyweight: CoachStats["bodyweight"] = null;
+    if (bwLog.length > 0) {
+      const sorted = [...bwLog].sort((a, b) => a.date.localeCompare(b.date));
+      const latest = sorted[sorted.length - 1];
+      const cutoff = shiftSeoulDateKey(-28);
+      const past = sorted.find((e) => e.date >= cutoff) ?? sorted[0];
+      bodyweight = {
+        latest: latest.kg,
+        deltaVs4wk:
+          past && past.date !== latest.date
+            ? Math.round((latest.kg - past.kg) * 10) / 10
+            : null,
+      };
+    }
+
+    return { bodyParts, neglected: neglectedParts(stats), bodyweight };
+  } catch {
+    return null;
+  }
+}
+
 // Append one compact memory note for today, preserving workoutHistory/favorites (partial update only).
 async function appendCoachMemory(plan: MorningCoachResponse) {
   if (!isDatabaseConfigured()) return;
@@ -295,6 +363,7 @@ async function generateCoachPlan(
   context: unknown,
   recentCheckins: Array<{ date: string; decision: string }>,
   coachMemory: unknown[],
+  coachStats: CoachStats | null,
 ): Promise<MorningCoachResponse> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
@@ -309,14 +378,17 @@ async function generateCoachPlan(
       body: JSON.stringify({
         model: OPENAI_MODEL,
         store: false,
-        reasoning: { effort: "low" },
-        max_output_tokens: 800,
+        reasoning: { effort: "medium" },
+        max_output_tokens: 1400,
         input: [
           { role: "developer", content: systemPrompt },
           {
             role: "user",
             content: JSON.stringify({
               decision,
+              bodyParts: coachStats?.bodyParts ?? [],
+              neglected: coachStats?.neglected ?? [],
+              bodyweight: coachStats?.bodyweight ?? null,
               context: context ?? {},
               recentCheckins,
               coachMemory,
@@ -441,9 +513,10 @@ export async function POST(request: Request) {
     // The decision remains cached in the browser even if Neon is temporarily unavailable.
   }
 
-  const [recentCheckins, coachMemory] = await Promise.all([
+  const [recentCheckins, coachMemory, coachStats] = await Promise.all([
     getRecentCheckins(),
     getCoachMemory(),
+    getCoachStats(),
   ]);
 
   try {
@@ -453,6 +526,7 @@ export async function POST(request: Request) {
       body.context,
       recentCheckins,
       coachMemory,
+      coachStats,
     );
 
     try {

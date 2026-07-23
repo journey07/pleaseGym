@@ -122,6 +122,10 @@ type TrainingReport = {
   headline: string;
   overall: string;
   frequencyComment: string;
+  // 신규 섹션 — 구(舊) 캐시엔 없으므로 optional(렌더 시 null-guard).
+  balanceSummary?: string;
+  neglectNote?: string;
+  bodyweightNote?: string;
   liftAnalysis: Array<{
     name: string;
     trend: "up" | "flat" | "down" | "new";
@@ -1048,6 +1052,25 @@ export default function Home() {
         {report && (
           <div className="report-body">
             <p className="report-overall">{report.overall}</p>
+
+            {report.balanceSummary && (
+              <div className="report-section">
+                <span>부위 밸런스</span>
+                <p>{report.balanceSummary}</p>
+              </div>
+            )}
+            {report.neglectNote && (
+              <div className="report-section report-section-warn">
+                <span>방치 부위</span>
+                <p>{report.neglectNote}</p>
+              </div>
+            )}
+            {report.bodyweightNote && (
+              <div className="report-section">
+                <span>체중·볼륨 추세</span>
+                <p>{report.bodyweightNote}</p>
+              </div>
+            )}
 
             <div className="report-frequency">
               <b>

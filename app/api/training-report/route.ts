@@ -1,7 +1,14 @@
 import { and, desc, eq, gte } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { getDb, isDatabaseConfigured } from "@/db";
-import { morningEvents } from "@/db/schema";
+import { morningEvents, userState } from "@/db/schema";
+import {
+  computeBodyPartStats,
+  neglectedParts,
+  type BodyPartStat,
+  type StatSession,
+} from "@/app/lib/bodyPartStats";
+import type { BodyPart } from "@/app/lib/bodyPart";
 
 // Same fixed coach model as the morning coach so every environment behaves identically.
 const OPENAI_MODEL = "gpt-5.6-luna";
@@ -16,6 +23,7 @@ type PostedSet = {
 type PostedExercise = {
   name?: string;
   metric?: string;
+  bodyPart?: BodyPart; // 수동 교정 우선 (I3)
   sets?: PostedSet[];
 };
 
@@ -57,12 +65,17 @@ type TrainingStats = {
   perWeekRecent: number;
   lifts: LiftSeries[];
   cardio: DistanceSeries[];
+  bodyParts: BodyPartStat[]; // 부위 단위 집계(신규 도배 해결·밸런스/방치 분석)
+  neglected: BodyPart[];
 };
 
 type TrainingReport = {
   headline: string;
   overall: string;
   frequencyComment: string;
+  balanceSummary: string; // 부위별 주간 볼륨 밸런스 1~2문장
+  neglectNote: string; // 약점·방치 부위 경고 + 왜 (없으면 "")
+  bodyweightNote: string; // 체중·총볼륨 추세 (없으면 "")
   liftAnalysis: Array<{
     name: string;
     trend: "up" | "flat" | "down" | "new";
@@ -88,6 +101,9 @@ const responseSchema = {
     headline: { type: "string" },
     overall: { type: "string" },
     frequencyComment: { type: "string" },
+    balanceSummary: { type: "string" },
+    neglectNote: { type: "string" },
+    bodyweightNote: { type: "string" },
     liftAnalysis: {
       type: "array",
       maxItems: 6,
@@ -109,34 +125,40 @@ const responseSchema = {
     "headline",
     "overall",
     "frequencyComment",
+    "balanceSummary",
+    "neglectNote",
+    "bodyweightNote",
     "liftAnalysis",
     "actionItems",
     "warning",
   ],
 } as const;
 
-const systemPrompt = `당신은 EVERYONE BUT YOU의 불꽃 스파르타 스트렝스 코치다. 에너지를 폭발시켜 사용자의 근력과 근육량을 끌어올린다.
-입력으로 서버가 미리 계산한 훈련 통계(stats)와 최근 아침 체크인 이력(recentCheckins)을 받는다. 이 데이터만 근거로 훈련 상태를 정확히 판정하고, 사용자의 실제 기록을 반드시 콕 집어 개인화하라.
+const systemPrompt = `당신은 EVERYONE BUT YOU의 불꽃 스파르타 스트렝스 코치다. 주간 심층 리포트를 쓴다.
 
-stats 설명:
-- perWeekRecent: 실제 추적 기간(trackingDays) 기준 주당 세션 수. sessionsLast7Days/28Days도 참고한다.
-- trackingDays: 추적 시작(firstDate) 후 경과일이며 최대 28이다. 표본이 어린지 판단하는 데 사용한다.
-- lifts[].kind: "load"(중량 종목) 또는 "reps"(맨몸 종목).
-- lifts[].points(kind=load): 날짜별 최고 세트(topWeight×repsAtTop), 추정 1RM(e1rm, Epley), 총볼륨(volume=Σ중량×반복). 시간순.
-- lifts[].points(kind=reps, 맨몸): topReps=그날 최고 반복수, topWeight=그때 추가중량(0이면 순수 맨몸), volume=총반복. e1rm은 무시(0). 시간순.
-- cardio[].points: 날짜별 유산소 거리(km).
+★ 사용자 프로필(고정): 마른 체형이라 "몸을 크게" 키우고 싶다. 목표는 전신 근비대 — 두께(등·가슴·후면사슬 density: 로우·데드)와 너비(어깨 측면·광배 V테이퍼: 사이드레이즈·랫). "전체 골고루".
+→ 리포트의 렌즈는 부위 균형·볼륨이다. 방치 부위를 콕 집고, 각 판정/처방에 "왜 그게 두께/너비에 필요한지" 원리를 한 줄로 붙여라(해부·근비대 논리). 지식 트레이너처럼.
 
-판정 규칙:
-- 빈도: trackingDays가 14일 미만이면 빈도 낙제 판정을 절대 하지 않는다. "아직 페이스를 단정하긴 이르고, 첫 주 페이스를 쌓는 중"이라고 격려하며 perWeekRecent는 참고 수치로만 언급한다. trackingDays가 14일 이상일 때만 근성장 기준으로 주 3회 이상은 좋음, 주 2회는 유지 최소선, 주 1회 이하는 성장에 부족하다고 판정한다.
-- 종목별 trend(kind=load): e1rm 흐름이 최근에 올라가면 up, 2~3주 이상 같은 수준이면 flat(정체), 내려가면 down, 데이터가 2회 이하면 new. 수치를 지어내지 말고 points에 있는 값만 인용한다.
-- 종목별 trend(kind=reps, 맨몸): topReps 흐름으로 판정(늘면 up, 정체 flat, 줄면 down, 2회 이하 new). 맨몸의 과부하 조언은 증량이 아니라 "반복 +1~2회" 또는 "세트 추가"로 한다. 추가중량(topWeight)이 늘고 있으면 그것도 진전으로 인정한다.
-- 정체(flat)나 하락(down)에는 반드시 구체 처방을 단다: 다음 세션에 +2.5kg 또는 반복 +1, 세트 추가, 해당 부위 빈도 증가 중 하나.
-- 볼륨이 빈도와 함께 늘고 있는지 언급한다. 상승 중이면 무엇이 효과를 내는지 짚는다.
-- actionItems: 다음 7일 안에 실행 가능한 구체 행동만, 최대 3개. "열심히 하기" 같은 추상 조언 금지.
-- 최대중량(1RM) 실측 테스트를 권하지 않는다. 통증 진단·치료를 하지 않는다. 무리한 증량(한 번에 5% 초과)을 권하지 않는다.
-- 어조: 한국어로 짧고 단호하게, "가자", "쥐어짜", "챔피언"처럼 불을 붙이는 스파르타 코치 톤을 쓴다. 비아냥이나 모욕은 금지하며 동기를 끌어올린다. "벤치 정체 3주째—이번엔 +2.5kg 쥐어짜!"처럼 실제 종목·기간·중량·빈도 중 관찰된 사실을 최소 한 조각 정확히 인용한다. headline은 24자 이내 핵심 판정, overall은 세 문장 이내로 쓴다.
-- 데이터가 적으면(세션 4회 미만) 판정을 유보하고 데이터를 쌓는 법을 안내한다.
-- warning: 안전상 주의가 필요할 때 한 문장, 없으면 빈 문자열.`;
+입력(stats): 서버가 계산한 실수치. 지어내기 금지, 있는 값만 인용.
+- stats.bodyParts: 근육 8부위별 { part, weeklyVolume(최근7일: 중량=Σ중량×반복, 맨몸=Σ반복), weeklySets, monthlyVolume, freq7/freq28(세션수), lastTrainedDate, daysSinceLast(null=28일 기록없음), trend(up/flat/down/new) }. weeklyVolume 내림차순 → 편중/방치가 한눈에.
+- stats.neglected: 방치 부위 목록(28일 공백이거나 10일+). ← 최우선으로 다뤄라.
+- stats.lifts[]: 종목별 시계열(kind=load는 e1rm, kind=reps 맨몸은 topReps). 보조 detail로만.
+- stats.perWeekRecent/trackingDays: 빈도. bodyweight: { latest, deltaVs4wk(4주 전 대비 증감kg, null=비교불가), points } 또는 null.
+
+출력 필드(반드시 부위 단위가 1차, 종목은 보조):
+- headline: 24자 이내 핵심 판정(부위 편중/방치를 반영. 예: "등은 폭발, 어깨·후면이 발목").
+- overall: 3문장 이내. 전반 상태 + 목표(크게/두께/너비) 대비 어디가 되고 어디가 구멍인지.
+- balanceSummary: 부위별 주간 볼륨 밸런스 1~2문장. bodyParts 근거로 "어디 편중, 어디 부족"을 수치와 함께. (예: "등·허벅지에 볼륨 몰림, 어깨·복근·허리는 바닥.")
+- neglectNote: neglected/저볼륨 부위 경고 + 왜(두께·너비 논리). 없으면 "". (예: "어깨 측면 방치—V너비는 측면 삼각근이 프레임을 벌려야 나온다. 데드 없어 기립근 두께도 빠짐.")
+- bodyweightNote: bodyweight 있으면 체중·총볼륨 추세 + 왜(벌크 목표라 체중이 재료). deltaVs4wk≤0이고 볼륨은 느는데 체중 정체면 "식사가 병목". 없으면 "체중도 기록하면 벌크 속도를 봐줄게" 한 줄 or "".
+- liftAnalysis: 종목별 trend/comment(최대 6, kind=load는 e1rm 흐름, reps는 topReps). 정체·하락엔 구체 처방(+2.5kg or 반복+1 or 세트+ or 부위 빈도↑). 보조.
+- actionItems: 다음 7일 실행 구체 행동 최대 3개. 방치 부위 보완을 우선. "열심히" 같은 추상 금지.
+- warning: 안전 주의 한 문장, 없으면 "".
+
+규칙:
+- 빈도 판정: trackingDays<14면 낙제 판정 금지("첫 페이스 쌓는 중"), 14+면 주3+ 좋음/주2 최소선/주1↓ 부족.
+- 데이터 적으면(세션<4 또는 bodyParts 대부분 0) 판정 유보 + 데이터 쌓는 법. 1RM 실측·통증 진단 금지, 증량 5% 초과 금지.
+- 어조: 스파르타("가자","쥐어짜","챔피언"), 비아냥·모욕 금지. 관찰된 사실 최소 한 조각 정확 인용.`;
 
 const dateKeyInSeoul = () =>
   new Intl.DateTimeFormat("en-CA", {
@@ -322,6 +344,11 @@ function buildStats(history: PostedSession[]): TrainingStats {
     : 0;
   const effectiveWeeks = Math.max(1, trackingDays / 7);
 
+  const bodyParts = computeBodyPartStats(
+    history as StatSession[],
+    dateKeyInSeoul(),
+  );
+
   return {
     totalSessions: sessions.length,
     firstDate,
@@ -333,6 +360,8 @@ function buildStats(history: PostedSession[]): TrainingStats {
     perWeekRecent: round1(sessionsLast28Days / effectiveWeeks),
     lifts,
     cardio,
+    bodyParts,
+    neglected: neglectedParts(bodyParts),
   };
 }
 
@@ -362,6 +391,42 @@ async function getRecentCheckins(): Promise<
   }
 }
 
+type BodyweightTrend = {
+  latest: number;
+  deltaVs4wk: number | null;
+  points: number;
+} | null;
+
+async function getBodyweightTrend(): Promise<BodyweightTrend> {
+  if (!isDatabaseConfigured()) return null;
+  try {
+    const [row] = await getDb()
+      .select({ bw: userState.bodyweightLog })
+      .from(userState)
+      .where(eq(userState.ownerId, ownerId()))
+      .limit(1);
+    const log = (Array.isArray(row?.bw) ? row.bw : []).filter(
+      (e): e is { date: string; kg: number } =>
+        !!e && typeof e.date === "string" && Number.isFinite(e.kg),
+    );
+    if (log.length === 0) return null;
+    const sorted = [...log].sort((a, b) => a.date.localeCompare(b.date));
+    const latest = sorted[sorted.length - 1];
+    const cutoff = shiftSeoulDateKey(-28);
+    const past = sorted.find((e) => e.date >= cutoff) ?? sorted[0];
+    return {
+      latest: latest.kg,
+      deltaVs4wk:
+        past && past.date !== latest.date
+          ? Math.round((latest.kg - past.kg) * 10) / 10
+          : null,
+      points: sorted.length,
+    };
+  } catch {
+    return null;
+  }
+}
+
 const extractOutputText = (response: OpenAIResponse) => {
   if (response.output_text) return response.output_text;
   for (const item of response.output ?? []) {
@@ -380,6 +445,9 @@ const isTrainingReport = (value: unknown): value is TrainingReport => {
     typeof candidate.headline === "string" &&
     typeof candidate.overall === "string" &&
     typeof candidate.frequencyComment === "string" &&
+    typeof candidate.balanceSummary === "string" &&
+    typeof candidate.neglectNote === "string" &&
+    typeof candidate.bodyweightNote === "string" &&
     Array.isArray(candidate.liftAnalysis) &&
     candidate.liftAnalysis.every(
       (item) =>
@@ -401,6 +469,7 @@ async function generateReport(
   apiKey: string,
   stats: TrainingStats,
   recentCheckins: Array<{ date: string; decision: string }>,
+  bodyweight: BodyweightTrend,
 ): Promise<TrainingReport> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 45_000);
@@ -426,6 +495,7 @@ async function generateReport(
             content: JSON.stringify({
               today: dateKeyInSeoul(),
               stats,
+              bodyweight,
               recentCheckins,
             }),
           },
@@ -508,10 +578,18 @@ export async function POST(request: Request) {
     );
   }
 
-  const recentCheckins = await getRecentCheckins();
+  const [recentCheckins, bodyweight] = await Promise.all([
+    getRecentCheckins(),
+    getBodyweightTrend(),
+  ]);
 
   try {
-    const report = await generateReport(apiKey, stats, recentCheckins);
+    const report = await generateReport(
+      apiKey,
+      stats,
+      recentCheckins,
+      bodyweight,
+    );
     return NextResponse.json({ report, stats, model: OPENAI_MODEL });
   } catch (error) {
     const message =
