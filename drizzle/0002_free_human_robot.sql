@@ -1,0 +1,1 @@
+ALTER TABLE "user_state" ADD COLUMN IF NOT EXISTS "bodyweight_log" jsonb DEFAULT '[]'::jsonb NOT NULL;

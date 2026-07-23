@@ -15,6 +15,13 @@
       "when": 1784540720673,
       "tag": "0001_lively_tarot",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784777000999,
+      "tag": "0002_free_human_robot",
+      "breakpoints": true
     }
   ]
 }

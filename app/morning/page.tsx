@@ -295,6 +295,9 @@ export default function MorningBridge() {
   const [newVideoUrl, setNewVideoUrl] = useState("");
   const [newVideoTitle, setNewVideoTitle] = useState("");
   const [videoNotice, setVideoNotice] = useState("");
+  const [bodyweightInput, setBodyweightInput] = useState("");
+  const [latestWeight, setLatestWeight] = useState<number | null>(null);
+  const [weightSaving, setWeightSaving] = useState(false);
   const holdInterval = useRef<number | null>(null);
   const holdTimeout = useRef<number | null>(null);
   // Set once the user acts on today's decision so a slower in-flight server
@@ -372,6 +375,29 @@ export default function MorningBridge() {
     };
 
     void hydrateDecisionFromServer();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 체중 최신값 하이드레이션 (기기 간 동기화).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/bodyweight", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          log?: { date: string; kg: number }[];
+        };
+        if (cancelled || !Array.isArray(data.log) || data.log.length === 0)
+          return;
+        const last = data.log[data.log.length - 1];
+        if (last && Number.isFinite(last.kg)) setLatestWeight(last.kg);
+      } catch {
+        // 오프라인 → 무시.
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -502,6 +528,27 @@ export default function MorningBridge() {
 
   const removeVideo = (videoId: string) => {
     setVideos((current) => current.filter((video) => video.id !== videoId));
+  };
+
+  const saveBodyweight = async () => {
+    const kg = Number(bodyweightInput);
+    if (!Number.isFinite(kg) || kg <= 0 || kg > 500) return;
+    setWeightSaving(true);
+    try {
+      const res = await fetch("/api/bodyweight", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date: todayKey(), kg }),
+      });
+      if (res.ok) {
+        setLatestWeight(kg);
+        setBodyweightInput("");
+      }
+    } catch {
+      // 오프라인 → 무시.
+    } finally {
+      setWeightSaving(false);
+    }
   };
 
   const clearSkipHold = () => {
@@ -675,6 +722,32 @@ export default function MorningBridge() {
           <div className="xp-total">
             <small>TOTAL XP</small>
             <b>{missionStats.totalXp.toLocaleString("ko-KR")}</b>
+          </div>
+        </div>
+
+        <div className="bodyweight-strip">
+          <span>
+            BODYWEIGHT
+            {latestWeight !== null && <b>{latestWeight}kg</b>}
+          </span>
+          <div>
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              inputMode="decimal"
+              value={bodyweightInput}
+              onChange={(event) => setBodyweightInput(event.target.value)}
+              placeholder={latestWeight !== null ? `${latestWeight}` : "kg"}
+              aria-label="오늘 체중 입력"
+            />
+            <button
+              type="button"
+              onClick={saveBodyweight}
+              disabled={weightSaving || bodyweightInput.trim() === ""}
+            >
+              {weightSaving ? "..." : "기록"}
+            </button>
           </div>
         </div>
 
