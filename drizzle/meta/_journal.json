@@ -22,6 +22,13 @@
       "when": 1784777000999,
       "tag": "0002_free_human_robot",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784909963525,
+      "tag": "0003_stiff_whistler",
+      "breakpoints": true
     }
   ]
 }

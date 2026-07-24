@@ -298,6 +298,13 @@ export default function MorningBridge() {
   const [bodyweightInput, setBodyweightInput] = useState("");
   const [latestWeight, setLatestWeight] = useState<number | null>(null);
   const [weightSaving, setWeightSaving] = useState(false);
+  const [schedule, setSchedule] = useState<{
+    enabled: boolean;
+    hour: number;
+    minute: number;
+  }>({ enabled: true, hour: 7, minute: 29 });
+  const [scheduleLoaded, setScheduleLoaded] = useState(false);
+  const [scheduleSavedAt, setScheduleSavedAt] = useState<number | null>(null);
   const holdInterval = useRef<number | null>(null);
   const holdTimeout = useRef<number | null>(null);
   // Set once the user acts on today's decision so a slower in-flight server
@@ -396,6 +403,31 @@ export default function MorningBridge() {
         if (last && Number.isFinite(last.kg)) setLatestWeight(last.kg);
       } catch {
         // 오프라인 → 무시.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 아침 루틴 스케줄 하이드레이션.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/morning-schedule", {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          schedule?: { enabled: boolean; hour: number; minute: number };
+        };
+        if (cancelled || !data.schedule) return;
+        setSchedule(data.schedule);
+      } catch {
+        // 오프라인 → 기본값 유지.
+      } finally {
+        if (!cancelled) setScheduleLoaded(true);
       }
     })();
     return () => {
@@ -528,6 +560,33 @@ export default function MorningBridge() {
 
   const removeVideo = (videoId: string) => {
     setVideos((current) => current.filter((video) => video.id !== videoId));
+  };
+
+  const persistSchedule = async (next: {
+    enabled: boolean;
+    hour: number;
+    minute: number;
+  }) => {
+    setSchedule(next);
+    try {
+      const res = await fetch("/api/morning-schedule", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      if (res.ok) setScheduleSavedAt(Date.now());
+    } catch {
+      // 오프라인 → 로컬 상태만 반영, 다음 로드 시 서버값.
+    }
+  };
+
+  const toggleSchedule = () =>
+    persistSchedule({ ...schedule, enabled: !schedule.enabled });
+
+  const changeScheduleTime = (value: string) => {
+    const [h, m] = value.split(":").map((n) => Number(n));
+    if (!Number.isInteger(h) || !Number.isInteger(m)) return;
+    persistSchedule({ ...schedule, hour: h, minute: m });
   };
 
   const saveBodyweight = async () => {
@@ -751,8 +810,52 @@ export default function MorningBridge() {
           </div>
         </div>
 
+        <div className={`routine-setting ${schedule.enabled ? "" : "off"}`}>
+          <div className="routine-setting-main">
+            <div className="routine-setting-copy">
+              <span>MORNING ALARM</span>
+              <b>
+                {schedule.enabled
+                  ? `매일 ${schedule.hour < 12 ? "오전" : "오후"} ${pad(
+                      schedule.hour,
+                    )}:${pad(schedule.minute)} 영상 재생`
+                  : "꺼짐 — 아침 영상이 뜨지 않아요"}
+              </b>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={schedule.enabled}
+              aria-label="아침 알람 켜기/끄기"
+              className={`routine-switch ${schedule.enabled ? "on" : ""}`}
+              onClick={toggleSchedule}
+            >
+              <i aria-hidden="true" />
+            </button>
+          </div>
+          {schedule.enabled && (
+            <div className="routine-time">
+              <label htmlFor="routine-time-input">알람 시간</label>
+              <input
+                id="routine-time-input"
+                type="time"
+                value={`${pad(schedule.hour)}:${pad(schedule.minute)}`}
+                onChange={(event) => changeScheduleTime(event.target.value)}
+              />
+            </div>
+          )}
+          <small className="routine-hint">
+            {scheduleLoaded
+              ? "변경은 몇 분 안에 맥 알람에 반영돼요."
+              : "설정 불러오는 중…"}
+            {scheduleSavedAt && <em> · 저장됨</em>}
+          </small>
+        </div>
+
         <div className="morning-copy">
-          <span>06:00 · TODAY&apos;S QUEST</span>
+          <span>
+            {pad(schedule.hour)}:{pad(schedule.minute)} · TODAY&apos;S QUEST
+          </span>
           <h1>
             {decision === null
               ? "첫 세트를 쟁취하라."

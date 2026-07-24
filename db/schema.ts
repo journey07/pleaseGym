@@ -22,6 +22,10 @@ export const userState = pgTable("user_state", {
     .$type<{ date: string; kg: number }[]>()
     .notNull()
     .default([]),
+  morningSchedule: jsonb("morning_schedule")
+    .$type<{ enabled: boolean; hour: number; minute: number }>()
+    .notNull()
+    .default({ enabled: true, hour: 7, minute: 29 }),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

@@ -1,0 +1,1 @@
+ALTER TABLE "user_state" ADD COLUMN IF NOT EXISTS "morning_schedule" jsonb DEFAULT '{"enabled":true,"hour":7,"minute":29}'::jsonb NOT NULL;

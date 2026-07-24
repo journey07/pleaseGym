@@ -69,6 +69,22 @@ button { color: inherit; }
 .bodyweight-strip input:focus { border-color: var(--ink); }
 .bodyweight-strip button { padding: 7px 14px; color: #fff; background: var(--ink); border: 0; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; }
 .bodyweight-strip button:disabled { opacity: .4; cursor: default; }
+.routine-setting { padding: 15px 0 13px; border-bottom: 1px solid var(--line); }
+.routine-setting-main { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.routine-setting-copy { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.routine-setting-copy > span { color: var(--muted); font: 700 9px/1 var(--font-geist-mono), monospace; letter-spacing: .09em; }
+.routine-setting-copy > b { color: #080808; font-size: 14px; font-weight: 700; }
+.routine-setting.off .routine-setting-copy > b { color: var(--muted); }
+.routine-switch { flex: 0 0 auto; width: 46px; height: 27px; padding: 0; border: 0; border-radius: 999px; background: #d9d9d2; cursor: pointer; transition: background .18s ease; }
+.routine-switch.on { background: var(--accent); }
+.routine-switch > i { display: block; width: 21px; height: 21px; margin: 3px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .18s ease; }
+.routine-switch.on > i { transform: translateX(19px); }
+.routine-time { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 13px; padding: 11px 14px; background: #fafaf7; border: 1px solid var(--soft-line); border-radius: 10px; }
+.routine-time label { color: var(--muted); font: 700 10px/1 var(--font-geist-mono), monospace; letter-spacing: .05em; }
+.routine-time input { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: 700 16px var(--font-geist-mono), monospace; color: #080808; }
+.routine-time input:focus { outline: 0; border-color: var(--ink); }
+.routine-hint { display: block; margin-top: 10px; color: var(--muted); font-size: 11px; }
+.routine-hint em { color: var(--accent); font-style: normal; font-weight: 700; }
 .morning-copy { padding: clamp(36px, 6vh, 58px) 0 26px; }
 .morning-copy > span { color: var(--accent); font: 700 10px/1 var(--font-geist-mono), monospace; letter-spacing: .13em; }
 .morning-copy h1 { max-width: 740px; margin: 17px 0 13px; color: #090909; font-size: clamp(42px, 7vw, 72px); line-height: .98; letter-spacing: -.065em; }
