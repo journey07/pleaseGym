@@ -24,16 +24,18 @@ if ! response=$(/usr/bin/curl -fsS --max-time 8 "${API_URL}"); then
   exit 0
 fi
 
-# python으로 안전 파싱: "enabled hour minute" 한 줄.
+# python으로 안전 파싱: "configured enabled hour minute" 한 줄.
 if ! parsed=$(print -r -- "${response}" | "${PYTHON_BINARY}" -c '
 import json, sys
 try:
-    d = json.load(sys.stdin).get("schedule", {})
+    payload = json.load(sys.stdin)
+    configured = 1 if payload.get("configured") is True else 0
+    d = payload.get("schedule", {})
     en = 1 if d.get("enabled", True) else 0
     h = int(d.get("hour", 7)); m = int(d.get("minute", 29))
     if not (0 <= h <= 23 and 0 <= m <= 59):
         raise ValueError
-    print(en, h, m)
+    print(configured, en, h, m)
 except Exception:
     sys.exit(1)
 '); then
@@ -41,9 +43,15 @@ except Exception:
   exit 0
 fi
 
-enabled=${parsed[(w)1]}
-hour=${parsed[(w)2]}
-minute=${parsed[(w)3]}
+configured=${parsed[(w)1]}
+enabled=${parsed[(w)2]}
+hour=${parsed[(w)3]}
+minute=${parsed[(w)4]}
+
+if [[ "${configured}" != "1" ]]; then
+  log "config 미설정 — 이번 주기 건너뜀."
+  exit 0
+fi
 
 if [[ ! -f "${PLIST}" ]]; then
   log "morning plist 없음 (${PLIST}) — 스킵."
@@ -53,7 +61,7 @@ fi
 # OFF: 알람 언로드.
 if [[ "${enabled}" == "0" ]]; then
   if is_loaded; then
-    /bin/launchctl unload "${PLIST}" 2>/dev/null || true
+    /bin/launchctl unload -w "${PLIST}" 2>/dev/null || true
     log "알람 OFF → 언로드."
   fi
   exit 0

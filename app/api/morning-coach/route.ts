@@ -194,7 +194,9 @@ async function getTodayMorningEvent(): Promise<{
     if (!row) return null;
     if (row.decision !== "go" && row.decision !== "no_go") return null;
     const coachPlan =
-      row.coachPlan && isMorningCoachResponse(row.coachPlan)
+      row.coachPlan &&
+      isMorningCoachResponse(row.coachPlan) &&
+      row.coachPlan.decision === row.decision
         ? row.coachPlan
         : null;
     return { decision: row.decision, model: row.model ?? null, coachPlan };

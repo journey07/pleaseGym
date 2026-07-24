@@ -365,9 +365,9 @@ export default function MorningBridge() {
         setTodayDecision(data.decision);
         storeDecision(data.decision); // mirror into local so streak/idempotency stay consistent
         setMissionStats(calculateMissionStats());
+        setDecision(data.decision);
 
         if (data.coach) {
-          setDecision(data.decision);
           setCoach(data.coach);
           setStatus("done");
           writeCoachResultCache({
@@ -829,6 +829,7 @@ export default function MorningBridge() {
               aria-label="아침 알람 켜기/끄기"
               className={`routine-switch ${schedule.enabled ? "on" : ""}`}
               onClick={toggleSchedule}
+              disabled={!scheduleLoaded}
             >
               <i aria-hidden="true" />
             </button>
@@ -841,6 +842,7 @@ export default function MorningBridge() {
                 type="time"
                 value={`${pad(schedule.hour)}:${pad(schedule.minute)}`}
                 onChange={(event) => changeScheduleTime(event.target.value)}
+                disabled={!scheduleLoaded}
               />
             </div>
           )}
