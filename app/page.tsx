@@ -82,8 +82,9 @@ type Metric = "weight" | "distance" | "bodyweight";
 type Exercise = {
   id: string;
   name: string;
-  // "bodyweight": reps는 주 지표, weight 필드는 추가중량(+kg, 기본 0)으로 재사용.
+  // "bodyweight": assisted일 때 weight는 보조 크기(+kg), 아니면 추가중량(+kg).
   metric?: Metric;
+  assisted?: boolean;
   sets: WorkoutSet[];
   bodyPart?: BodyPart;
   bodyPartManual?: boolean;
@@ -757,6 +758,17 @@ export default function Home() {
     setDirty(true);
   };
 
+  const toggleExerciseAssisted = (exerciseId: string) => {
+    setDraft((current) =>
+      current.map((exercise) =>
+        exercise.id === exerciseId
+          ? { ...exercise, assisted: !exercise.assisted }
+          : exercise,
+      ),
+    );
+    setDirty(true);
+  };
+
   const addSet = (exerciseId: string) => {
     setDraft((current) =>
       current.map((exercise) => {
@@ -1320,7 +1332,7 @@ export default function Home() {
                             <div
                               className="bodypart-row"
                               role="group"
-                              aria-label={`${exercise.name} 부위`}
+                              aria-label={`${exercise.name} 운동 설정`}
                             >
                               {BODY_PARTS.map((part) => (
                                 <button
@@ -1341,6 +1353,21 @@ export default function Home() {
                                   {part}
                                 </button>
                               ))}
+                              {isBodyweight && (
+                                <button
+                                  type="button"
+                                  className={`bodypart-chip ${
+                                    exercise.assisted ? "active" : ""
+                                  }`}
+                                  onClick={() =>
+                                    toggleExerciseAssisted(exercise.id)
+                                  }
+                                  aria-label={`${exercise.name} 보조`}
+                                  aria-pressed={exercise.assisted === true}
+                                >
+                                  보조
+                                </button>
+                              )}
                             </div>
                             {isDistance ? (
                               <div className="distance-entry">
@@ -1368,7 +1395,13 @@ export default function Home() {
                               <>
                                 <div className="sets-head">
                                   <span>SET</span>
-                                  <span>{isBodyweight ? "＋KG" : "KG"}</span>
+                                  <span>
+                                    {isBodyweight
+                                      ? exercise.assisted
+                                        ? "보조KG"
+                                        : "＋KG"
+                                      : "KG"}
+                                  </span>
                                   <span>REPS</span>
                                   <span />
                                 </div>
@@ -1386,7 +1419,13 @@ export default function Home() {
                                           weight: Number(event.target.value),
                                         })
                                       }
-                                      aria-label={`${exercise.name} ${setIndex + 1}세트 ${isBodyweight ? "추가중량" : "중량"}`}
+                                      aria-label={`${exercise.name} ${setIndex + 1}세트 ${
+                                        isBodyweight
+                                          ? exercise.assisted
+                                            ? "보조중량"
+                                            : "추가중량"
+                                          : "중량"
+                                      }`}
                                     />
                                     <input
                                       type="number"

@@ -13,6 +13,7 @@ export type StatSet = {
 export type StatExercise = {
   name?: string;
   metric?: string;
+  assisted?: boolean;
   bodyPart?: BodyPart;
   sets?: StatSet[];
 };
@@ -51,6 +52,7 @@ const exerciseVolume = (
     const reps = Number(s.reps) || 0;
     if (reps <= 0) continue;
     const weight = Number(s.weight) || 0;
+    // TODO: assisted bodyweight 볼륨은 날짜별 체중을 전달할 수 있을 때 실제부하로 집계한다.
     volume += ex.metric === "bodyweight" ? reps : weight * reps;
     sets += 1;
   }

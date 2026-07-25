@@ -23,6 +23,7 @@ type PostedSet = {
 type PostedExercise = {
   name?: string;
   metric?: string;
+  assisted?: boolean;
   bodyPart?: BodyPart; // 수동 교정 우선 (I3)
   sets?: PostedSet[];
 };
@@ -30,6 +31,11 @@ type PostedExercise = {
 type PostedSession = {
   date?: string;
   exercises?: PostedExercise[];
+};
+
+type BodyweightEntry = {
+  date: string;
+  kg: number;
 };
 
 type LiftPoint = {
@@ -142,7 +148,7 @@ const systemPrompt = `당신은 EVERYONE BUT YOU의 불꽃 스파르타 스트�
 입력(stats): 서버가 계산한 실수치. 지어내기 금지, 있는 값만 인용.
 - stats.bodyParts: 근육 8부위별 { part, weeklyVolume(최근7일: 중량=Σ중량×반복, 맨몸=Σ반복), weeklySets, monthlyVolume, freq7/freq28(세션수), lastTrainedDate, daysSinceLast(null=28일 기록없음), trend(up/flat/down/new) }. weeklyVolume 내림차순 → 편중/방치가 한눈에.
 - stats.neglected: 방치 부위 목록(28일 공백이거나 10일+). ← 최우선으로 다뤄라.
-- stats.lifts[]: 종목별 시계열(kind=load는 e1rm, kind=reps 맨몸은 topReps). 보조 detail로만.
+- stats.lifts[]: 종목별 시계열(kind=load는 e1rm, kind=reps 맨몸은 topReps). kind=load에는 어시스티드 맨몸 운동도 포함(부하=체중−보조kg, 보조↓=성장). 보조 detail로만.
 - stats.perWeekRecent/trackingDays: 빈도. bodyweight: { latest, deltaVs4wk(4주 전 대비 증감kg, null=비교불가), points } 또는 null.
 
 출력 필드(반드시 부위 단위가 1차, 종목은 보조):
@@ -178,7 +184,23 @@ const ownerId = () => process.env.FIRST_REP_OWNER_ID ?? "local-owner";
 
 const round1 = (value: number) => Math.round(value * 10) / 10;
 
-function buildStats(history: PostedSession[]): TrainingStats {
+const bodyweightForDate = (
+  bodyweightLog: BodyweightEntry[],
+  date: string,
+): number | null => {
+  if (bodyweightLog.length === 0) return null;
+  let latest: BodyweightEntry | undefined;
+  for (const entry of bodyweightLog) {
+    if (entry.date.slice(0, 10) > date) break;
+    latest = entry;
+  }
+  return (latest ?? bodyweightLog[0]).kg;
+};
+
+function buildStats(
+  history: PostedSession[],
+  bodyweightLog: BodyweightEntry[],
+): TrainingStats {
   const sessions = history
     .filter(
       (session) =>
@@ -222,13 +244,58 @@ function buildStats(history: PostedSession[]): TrainingStats {
       }
 
       if (exercise.metric === "bodyweight") {
-        // 맨몸: reps가 진행 지표. weight는 추가중량(있으면 보조).
+        const bodyweight =
+          exercise.assisted === true
+            ? bodyweightForDate(bodyweightLog, session.date)
+            : null;
+        if (exercise.assisted === true && bodyweight !== null) {
+          let topWeight = 0;
+          let repsAtTop = 0;
+          let volume = 0;
+          for (const set of doneSets) {
+            const reps = Number(set.reps) || 0;
+            if (reps <= 0) continue;
+            const assist = Math.max(Number(set.weight) || 0, 0);
+            const effectiveLoad = Math.max(bodyweight - assist, 1);
+            volume += effectiveLoad * reps;
+            if (effectiveLoad > topWeight) {
+              topWeight = effectiveLoad;
+              repsAtTop = reps;
+            }
+          }
+          if (topWeight <= 0) continue;
+          const point: LiftPoint = {
+            date: session.date,
+            topWeight: round1(topWeight),
+            repsAtTop,
+            e1rm: round1(topWeight * (1 + repsAtTop / 30)),
+            volume: Math.round(volume),
+          };
+          const byDate = liftMap.get(name) ?? new Map<string, LiftPoint>();
+          const existing = byDate.get(session.date);
+          if (!existing) {
+            byDate.set(session.date, point);
+          } else {
+            const best = point.e1rm > existing.e1rm ? point : existing;
+            byDate.set(session.date, {
+              ...best,
+              volume: existing.volume + point.volume,
+            });
+          }
+          liftMap.set(name, byDate);
+          continue;
+        }
+
+        // 기존 맨몸: reps가 진행 지표. weight는 추가중량(있으면 보조).
         let topReps = 0;
         let addedAtTop = 0;
         let repVolume = 0;
         for (const set of doneSets) {
           const reps = Number(set.reps) || 0;
-          const added = Number(set.weight) || 0;
+          // assisted인데 체중 로그가 없어 이 폴백에 온 경우: weight는 "보조량"이므로
+          // 추가중량(+kg)으로 오해되지 않게 0 처리(부호 반전 방지).
+          const added =
+            exercise.assisted === true ? 0 : Number(set.weight) || 0;
           if (reps <= 0) continue;
           repVolume += reps;
           if (reps > topReps) {
@@ -397,34 +464,38 @@ type BodyweightTrend = {
   points: number;
 } | null;
 
-async function getBodyweightTrend(): Promise<BodyweightTrend> {
-  if (!isDatabaseConfigured()) return null;
+async function getBodyweightLog(): Promise<BodyweightEntry[]> {
+  if (!isDatabaseConfigured()) return [];
   try {
     const [row] = await getDb()
       .select({ bw: userState.bodyweightLog })
       .from(userState)
       .where(eq(userState.ownerId, ownerId()))
       .limit(1);
-    const log = (Array.isArray(row?.bw) ? row.bw : []).filter(
-      (e): e is { date: string; kg: number } =>
-        !!e && typeof e.date === "string" && Number.isFinite(e.kg),
-    );
-    if (log.length === 0) return null;
-    const sorted = [...log].sort((a, b) => a.date.localeCompare(b.date));
-    const latest = sorted[sorted.length - 1];
-    const cutoff = shiftSeoulDateKey(-28);
-    const past = sorted.find((e) => e.date >= cutoff) ?? sorted[0];
-    return {
-      latest: latest.kg,
-      deltaVs4wk:
-        past && past.date !== latest.date
-          ? Math.round((latest.kg - past.kg) * 10) / 10
-          : null,
-      points: sorted.length,
-    };
+    return (Array.isArray(row?.bw) ? row.bw : [])
+      .filter(
+        (e): e is BodyweightEntry =>
+          !!e && typeof e.date === "string" && Number.isFinite(e.kg),
+      )
+      .sort((a, b) => a.date.localeCompare(b.date));
   } catch {
-    return null;
+    return [];
   }
+}
+
+function getBodyweightTrend(log: BodyweightEntry[]): BodyweightTrend {
+  if (log.length === 0) return null;
+  const latest = log[log.length - 1];
+  const cutoff = shiftSeoulDateKey(-28);
+  const past = log.find((entry) => entry.date >= cutoff) ?? log[0];
+  return {
+    latest: latest.kg,
+    deltaVs4wk:
+      past.date !== latest.date
+        ? Math.round((latest.kg - past.kg) * 10) / 10
+        : null,
+    points: log.length,
+  };
 }
 
 const extractOutputText = (response: OpenAIResponse) => {
@@ -564,7 +635,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const stats = buildStats(body.history as PostedSession[]);
+  const bodyweightLog = await getBodyweightLog();
+  const stats = buildStats(body.history as PostedSession[], bodyweightLog);
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -578,10 +650,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const [recentCheckins, bodyweight] = await Promise.all([
-    getRecentCheckins(),
-    getBodyweightTrend(),
-  ]);
+  const recentCheckins = await getRecentCheckins();
+  const bodyweight = getBodyweightTrend(bodyweightLog);
 
   try {
     const report = await generateReport(
