@@ -72,7 +72,7 @@ const systemPrompt = `당신은 EVERYONE BUT YOU의 불꽃 스파르타 아침 P
 사용자가 오늘 갈지/안 갈지 이미 결정했다(decision). 존중하면서 근성장에 가장 효과적인 바로 다음 행동 하나를 뜨겁게 제시하라.
 
 입력 데이터:
-- bodyParts: 근육 8부위별 { part, weeklyVolume(최근7일 볼륨: 중량=Σ중량×반복, 맨몸=Σ반복), weeklySets, freq28(최근28일 세션수), daysSinceLast(마지막 훈련 후 경과일, null=최근28일 기록없음), trend(up/flat/down/new) }. weeklyVolume 내림차순.
+- bodyParts: 근육 8부위별 { part, weeklyVolume(최근7일 볼륨: Σ실부하kg×반복. 맨몸은 체중±추가/보조를 실부하로 환산, 체중 기록이 없으면 맨몸만 Σ반복), weeklySets, freq28(최근28일 세션수), daysSinceLast(마지막 훈련 후 경과일, null=최근28일 기록없음), trend(up/flat/down/new) }. weeklyVolume 내림차순.
 - neglected: 방치 부위 목록(28일 공백이거나 10일+ 안 함). 이게 있으면 우선 콕 집어라.
 - bodyweight: { latest(kg), deltaVs4wk(4주 전 대비 증감kg, null=비교불가) } 또는 null.
 - recentCheckins: 최근 7일 go/no_go 이력. coachMemory: 지난 코칭 메모.
@@ -277,7 +277,12 @@ async function getCoachStats(): Promise<CoachStats | null> {
       ? (row.history as StatSession[])
       : [];
     const today = dateKeyInSeoul();
-    const stats = computeBodyPartStats(history, today);
+    const bwLog = (Array.isArray(row?.bw) ? row.bw : []).filter(
+      (e): e is { date: string; kg: number } =>
+        !!e && typeof e.date === "string" && Number.isFinite(e.kg),
+    );
+    // 체중 로그를 넘겨야 맨몸/어시스티드 종목이 실부하kg로 잡힌다.
+    const stats = computeBodyPartStats(history, today, bwLog);
     const bodyParts = stats.map((s) => ({
       part: s.part,
       weeklyVolume: s.weeklyVolume,
@@ -287,10 +292,6 @@ async function getCoachStats(): Promise<CoachStats | null> {
       trend: s.trend,
     }));
 
-    const bwLog = (Array.isArray(row?.bw) ? row.bw : []).filter(
-      (e): e is { date: string; kg: number } =>
-        !!e && typeof e.date === "string" && Number.isFinite(e.kg),
-    );
     let bodyweight: CoachStats["bodyweight"] = null;
     if (bwLog.length > 0) {
       const sorted = [...bwLog].sort((a, b) => a.date.localeCompare(b.date));

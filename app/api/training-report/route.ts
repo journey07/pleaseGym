@@ -3,9 +3,11 @@ import { NextResponse } from "next/server";
 import { getDb, isDatabaseConfigured } from "@/db";
 import { morningEvents, userState } from "@/db/schema";
 import {
+  bodyweightForDate,
   computeBodyPartStats,
   neglectedParts,
   type BodyPartStat,
+  type BodyweightEntry,
   type StatSession,
 } from "@/app/lib/bodyPartStats";
 import type { BodyPart } from "@/app/lib/bodyPart";
@@ -31,11 +33,6 @@ type PostedExercise = {
 type PostedSession = {
   date?: string;
   exercises?: PostedExercise[];
-};
-
-type BodyweightEntry = {
-  date: string;
-  kg: number;
 };
 
 type LiftPoint = {
@@ -146,7 +143,7 @@ const systemPrompt = `당신은 EVERYONE BUT YOU의 불꽃 스파르타 스트�
 → 리포트의 렌즈는 부위 균형·볼륨이다. 방치 부위를 콕 집고, 각 판정/처방에 "왜 그게 두께/너비에 필요한지" 원리를 한 줄로 붙여라(해부·근비대 논리). 지식 트레이너처럼.
 
 입력(stats): 서버가 계산한 실수치. 지어내기 금지, 있는 값만 인용.
-- stats.bodyParts: 근육 8부위별 { part, weeklyVolume(최근7일: 중량=Σ중량×반복, 맨몸=Σ반복), weeklySets, monthlyVolume, freq7/freq28(세션수), lastTrainedDate, daysSinceLast(null=28일 기록없음), trend(up/flat/down/new) }. weeklyVolume 내림차순 → 편중/방치가 한눈에.
+- stats.bodyParts: 근육 8부위별 { part, weeklyVolume(최근7일: Σ실부하kg×반복. 맨몸은 체중±추가/보조를 실부하로 환산, 체중 기록이 없으면 맨몸만 Σ반복), weeklySets, monthlyVolume, freq7/freq28(세션수), lastTrainedDate, daysSinceLast(null=28일 기록없음), trend(up/flat/down/new) }. weeklyVolume 내림차순 → 편중/방치가 한눈에.
 - stats.neglected: 방치 부위 목록(28일 공백이거나 10일+). ← 최우선으로 다뤄라.
 - stats.lifts[]: 종목별 시계열(kind=load는 e1rm, kind=reps 맨몸은 topReps). kind=load에는 어시스티드 맨몸 운동도 포함(부하=체중−보조kg, 보조↓=성장). 보조 detail로만.
 - stats.perWeekRecent/trackingDays: 빈도. bodyweight: { latest, deltaVs4wk(4주 전 대비 증감kg, null=비교불가), points } 또는 null.
@@ -183,19 +180,6 @@ const shiftSeoulDateKey = (days: number) => {
 const ownerId = () => process.env.FIRST_REP_OWNER_ID ?? "local-owner";
 
 const round1 = (value: number) => Math.round(value * 10) / 10;
-
-const bodyweightForDate = (
-  bodyweightLog: BodyweightEntry[],
-  date: string,
-): number | null => {
-  if (bodyweightLog.length === 0) return null;
-  let latest: BodyweightEntry | undefined;
-  for (const entry of bodyweightLog) {
-    if (entry.date.slice(0, 10) > date) break;
-    latest = entry;
-  }
-  return (latest ?? bodyweightLog[0]).kg;
-};
 
 function buildStats(
   history: PostedSession[],
@@ -414,6 +398,7 @@ function buildStats(
   const bodyParts = computeBodyPartStats(
     history as StatSession[],
     dateKeyInSeoul(),
+    bodyweightLog,
   );
 
   return {
