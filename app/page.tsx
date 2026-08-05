@@ -104,6 +104,21 @@ const bodyGroup = (exercise: Exercise): BodyGroup => {
 const exerciseBodyPart = (exercise: Exercise): BodyPart =>
   exercise.bodyPart ?? inferBodyPart(exercise.name);
 
+// 어시스티드(보조) 종목 여부: 명시 플래그 또는 이름 키워드로 자동 감지.
+// 보조는 몸에서 빼주는 무게라 "최대"가 아니라 "최소"가 베스트다.
+const ASSISTED_NAME = /assisted|어시스티드|어시스트/i;
+const isAssistedExercise = (exercise: Exercise): boolean =>
+  exercise.assisted === true || ASSISTED_NAME.test(exercise.name);
+
+// 보조 종목의 세트 중 weight>0 최소값(가장 적은 보조 = 베스트). 없으면 null.
+const minAssistWeight = (exercise: Exercise): number | null => {
+  let min = Infinity;
+  for (const set of exercise.sets) {
+    if (set.weight > 0 && set.weight < min) min = set.weight;
+  }
+  return Number.isFinite(min) ? min : null;
+};
+
 type Session = {
   id: string;
   date: string;
@@ -598,10 +613,19 @@ export default function Home() {
         .filter((exercise) => exercise.metric !== "distance")
         .flatMap((exercise) => exercise.sets.filter((set) => set.done)),
     );
+    // HEAVIEST엔 실제로 "든" 무게만. 보조(어시스티드)는 몸에서 빼주는 값이라 제외.
+    const liftedSets = monthSessions.flatMap((session) =>
+      session.exercises
+        .filter(
+          (exercise) =>
+            exercise.metric !== "distance" && !isAssistedExercise(exercise),
+        )
+        .flatMap((exercise) => exercise.sets.filter((set) => set.done)),
+    );
     return {
       workouts: monthSessions.length,
       sets: sets.length,
-      max: sets.reduce((value, set) => Math.max(value, set.weight), 0),
+      max: liftedSets.reduce((value, set) => Math.max(value, set.weight), 0),
     };
   }, [monthSessions]);
 
@@ -621,7 +645,16 @@ export default function Home() {
     return {
       sets: weightSets.length + bodyweightSets.length,
       volume: weightSets.reduce((sum, set) => sum + set.weight * set.reps, 0),
-      max: weightSets.reduce((value, set) => Math.max(value, set.weight), 0),
+      // max(든 무게)엔 보조 제외.
+      max: draft
+        .filter(
+          (exercise) =>
+            exercise.metric !== "distance" &&
+            exercise.metric !== "bodyweight" &&
+            !isAssistedExercise(exercise),
+        )
+        .flatMap((exercise) => exercise.sets)
+        .reduce((value, set) => Math.max(value, set.weight), 0),
       hasWeight: weightSets.length > 0,
       reps: bodyweightSets.reduce((sum, set) => sum + set.reps, 0),
       distance: distanceSets.reduce(
@@ -1176,6 +1209,10 @@ export default function Home() {
                     const sets = exercise.sets.filter((set) => set.done);
                     const isDistance = exercise.metric === "distance";
                     const isBodyweight = exercise.metric === "bodyweight";
+                    // 보조 종목은 최소 보조값(베스트)을 미리보기에 표시 → 로그 칩과 일치.
+                    const assistMin = isAssistedExercise(exercise)
+                      ? minAssistWeight(exercise)
+                      : null;
                     return {
                       id: exercise.id,
                       name: exercise.name,
@@ -1184,16 +1221,24 @@ export default function Home() {
                             (sum, set) => sum + (set.distanceKm ?? 0),
                             0,
                           )
-                        : isBodyweight
-                          ? sets.reduce(
-                              (value, set) => Math.max(value, set.reps),
-                              0,
-                            )
-                          : sets.reduce(
-                              (value, set) => Math.max(value, set.weight),
-                              0,
-                            ),
-                      unit: isDistance ? "km" : isBodyweight ? "회" : "kg",
+                        : assistMin !== null
+                          ? assistMin
+                          : isBodyweight
+                            ? sets.reduce(
+                                (value, set) => Math.max(value, set.reps),
+                                0,
+                              )
+                            : sets.reduce(
+                                (value, set) => Math.max(value, set.weight),
+                                0,
+                              ),
+                      unit: isDistance
+                        ? "km"
+                        : assistMin !== null
+                          ? "kg"
+                          : isBodyweight
+                            ? "회"
+                            : "kg",
                       group: bodyGroup(exercise),
                     };
                   })
@@ -1267,6 +1312,9 @@ export default function Home() {
                       (value, set) => Math.max(value, set.weight),
                       0,
                     );
+                    const assistedMin = isAssistedExercise(exercise)
+                      ? minAssistWeight(exercise)
+                      : null;
                     const maxReps = exercise.sets.reduce(
                       (value, set) => Math.max(value, set.reps),
                       0,
@@ -1306,9 +1354,11 @@ export default function Home() {
                               <small>
                                 {isDistance
                                   ? `${formatNumber(distance)}km`
-                                  : isBodyweight
-                                    ? `MAX ${formatNumber(maxReps)}회`
-                                    : `MAX ${formatNumber(max)}kg`}
+                                  : assistedMin !== null
+                                    ? `보조 ${formatNumber(assistedMin)}kg`
+                                    : isBodyweight
+                                      ? `MAX ${formatNumber(maxReps)}회`
+                                      : `MAX ${formatNumber(max)}kg`}
                               </small>
                               <button
                                 className={`favorite-toggle ${isFavorite(exercise) ? "active" : ""}`}
@@ -1413,10 +1463,14 @@ export default function Home() {
                                       min="0"
                                       step="0.5"
                                       inputMode="decimal"
-                                      value={set.weight}
+                                      placeholder="0"
+                                      value={set.weight === 0 ? "" : set.weight}
                                       onChange={(event) =>
                                         updateSet(exercise.id, set.id, {
-                                          weight: Number(event.target.value),
+                                          weight:
+                                            event.target.value === ""
+                                              ? 0
+                                              : Number(event.target.value),
                                         })
                                       }
                                       aria-label={`${exercise.name} ${setIndex + 1}세트 ${
