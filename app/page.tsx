@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ComponentProps,
   FormEvent,
   ReactNode,
   useEffect,
@@ -64,6 +65,38 @@ function SortableExercise({
         isDragging,
       })}
     </>
+  );
+}
+
+// 숫자 칸은 편집 중인 문자열을 그대로 들고 있는다. 값(0)만 들고 있으면
+// 지운 칸에 "0"이 다시 그려져 지울 수 없고, "0.5"처럼 0으로 시작하는 값도
+// 입력 도중에 튄다. 포커스가 빠지면 다시 모델 값을 따라간다.
+function NumberInput({
+  value,
+  onValueChange,
+  onBlur,
+  ...rest
+}: Omit<ComponentProps<"input">, "value" | "onChange"> & {
+  value: number;
+  onValueChange: (value: number) => void;
+}) {
+  const [text, setText] = useState<string | null>(null);
+  return (
+    <input
+      {...rest}
+      type="number"
+      value={text ?? (value === 0 ? "" : String(value))}
+      onChange={(event) => {
+        const raw = event.target.value;
+        setText(raw);
+        const parsed = raw === "" ? 0 : Number(raw);
+        if (Number.isFinite(parsed)) onValueChange(parsed);
+      }}
+      onBlur={(event) => {
+        setText(null);
+        onBlur?.(event);
+      }}
+    />
   );
 }
 
@@ -815,6 +848,10 @@ export default function Home() {
               ...blankSet(),
               weight: previous?.weight ?? 0,
               reps: previous?.reps ?? 8,
+              // 기본 4세트와 똑같이 윗줄을 따라가게 둔다. 이 플래그가 없으면
+              // 추가한 줄만 고정돼서 위에서 고친 무게·횟수가 내려오지 않는다.
+              inheritWeight: previous !== undefined,
+              inheritReps: previous !== undefined,
             },
           ],
         };
@@ -1422,19 +1459,17 @@ export default function Home() {
                             {isDistance ? (
                               <div className="distance-entry">
                                 <span>DISTANCE</span>
-                                <input
-                                  type="number"
+                                <NumberInput
                                   min="0"
                                   step="0.1"
                                   inputMode="decimal"
+                                  placeholder="0"
                                   value={exercise.sets[0]?.distanceKm ?? 0}
-                                  onChange={(event) =>
+                                  onValueChange={(distanceKm) =>
                                     updateSet(
                                       exercise.id,
                                       exercise.sets[0].id,
-                                      {
-                                        distanceKm: Number(event.target.value),
-                                      },
+                                      { distanceKm },
                                     )
                                   }
                                   aria-label={`${exercise.name} 거리`}
@@ -1458,19 +1493,15 @@ export default function Home() {
                                 {exercise.sets.map((set, setIndex) => (
                                   <div className="set-entry" key={set.id}>
                                     <b>{setIndex + 1}</b>
-                                    <input
-                                      type="number"
+                                    <NumberInput
                                       min="0"
                                       step="0.5"
                                       inputMode="decimal"
                                       placeholder="0"
-                                      value={set.weight === 0 ? "" : set.weight}
-                                      onChange={(event) =>
+                                      value={set.weight}
+                                      onValueChange={(weight) =>
                                         updateSet(exercise.id, set.id, {
-                                          weight:
-                                            event.target.value === ""
-                                              ? 0
-                                              : Number(event.target.value),
+                                          weight,
                                         })
                                       }
                                       aria-label={`${exercise.name} ${setIndex + 1}세트 ${
@@ -1481,16 +1512,14 @@ export default function Home() {
                                           : "중량"
                                       }`}
                                     />
-                                    <input
-                                      type="number"
+                                    <NumberInput
                                       min="1"
                                       step="1"
                                       inputMode="numeric"
+                                      placeholder="0"
                                       value={set.reps}
-                                      onChange={(event) =>
-                                        updateSet(exercise.id, set.id, {
-                                          reps: Number(event.target.value),
-                                        })
+                                      onValueChange={(reps) =>
+                                        updateSet(exercise.id, set.id, { reps })
                                       }
                                       aria-label={`${exercise.name} ${setIndex + 1}세트 반복`}
                                     />
