@@ -341,6 +341,12 @@ button { color: inherit; }
 .trend-dot.last { fill: var(--accent); stroke: var(--accent); }
 .trend-axis { fill: #96968f; font: 650 8px/1 var(--font-geist-mono), monospace; }
 .trend-axis.last { fill: #55554f; }
+.trend-hit { fill: transparent; cursor: pointer; outline: 0; }
+.trend-hit:focus-visible { fill: #19191714; }
+.trend-bubble rect { fill: var(--ink); }
+.trend-bubble text { fill: #fff; font: 750 9px/1 var(--font-geist-mono), monospace; }
+.trend-bubble .trend-bubble-detail { fill: #b9b9b1; font-size: 7px; font-weight: 650; }
+.trend-note { margin: 9px 0 0; color: #96968f; font-size: 9.5px; line-height: 1.55; }
 .detail-log { margin: 16px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .detail-log button { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; width: 100%; padding: 11px 2px; background: transparent; border: 0; border-bottom: 1px solid var(--soft-line, var(--line)); text-align: left; cursor: pointer; }
 .detail-log button:hover { background: var(--paper); }

@@ -100,7 +100,56 @@ function NumberInput({
   );
 }
 
+// SVG엔 자동 줄바꿈이 없어서 글자 폭을 직접 잰다. 한글·기호는 전각으로 계산.
+const textWidth = (text: string, size: number) =>
+  [...text].reduce(
+    (sum, char) => sum + size * (/[ㄱ-힝·×]/.test(char) ? 1 : 0.6),
+    0,
+  );
+
+// 누른 점 옆에 뜨는 말풍선. 위쪽에 자리가 없으면 점 아래로 내려간다.
+function TrendBubble({
+  x,
+  y,
+  width,
+  text,
+  detail,
+}: {
+  x: number;
+  y: number;
+  width: number;
+  text: string;
+  detail: string;
+}) {
+  const short = detail.length > 24 ? `${detail.slice(0, 23)}…` : detail;
+  const box = Math.max(textWidth(text, 9), textWidth(short, 7)) + 14;
+  const height = short ? 30 : 20;
+  const below = y - height - 10 < 0;
+  const top = below ? y + 10 : y - height - 10;
+  const left = Math.min(Math.max(x - box / 2, 2), width - box - 2);
+
+  return (
+    <g className="trend-bubble" pointerEvents="none">
+      <rect x={left} y={top} width={box} height={height} rx={3} />
+      <text x={left + box / 2} y={top + 12} textAnchor="middle">
+        {text}
+      </text>
+      {short && (
+        <text
+          className="trend-bubble-detail"
+          x={left + box / 2}
+          y={top + 23}
+          textAnchor="middle"
+        >
+          {short}
+        </text>
+      )}
+    </g>
+  );
+}
+
 // 세션별 대표 지표를 잇는 작은 선 그래프. 값이 하나면 점 하나만 찍는다.
+// 점을 누르면 그 세션의 날짜와 값이 말풍선으로 뜬다.
 function TrendChart({
   points,
   mode,
@@ -108,6 +157,7 @@ function TrendChart({
   points: TrendPoint[];
   mode: TrendMode;
 }) {
+  const [active, setActive] = useState<number | null>(null);
   const values = points.map(mode.value);
   const max = Math.max(...values);
   const min = Math.min(...values);
@@ -153,9 +203,41 @@ function TrendChart({
           }
           cx={x(index)}
           cy={y(mode.value(point))}
-          r={index === points.length - 1 ? 4 : 2.5}
+          r={index === active ? 5 : index === points.length - 1 ? 4 : 2.5}
         />
       ))}
+      {/* 손가락으로도 눌리도록 점보다 넉넉한 투명 히트 영역을 겹쳐 둔다. */}
+      {points.map((point, index) => (
+        <circle
+          key={`hit-${point.date}`}
+          className="trend-hit"
+          cx={x(index)}
+          cy={y(mode.value(point))}
+          r={13}
+          tabIndex={0}
+          role="button"
+          aria-label={`${shortDateLabel(point.date)} ${mode.label} ${formatNumber(
+            mode.value(point),
+          )}${mode.unit}`}
+          onClick={() => setActive(index === active ? null : index)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            setActive(index === active ? null : index);
+          }}
+        />
+      ))}
+      {active !== null && (
+        <TrendBubble
+          x={x(active)}
+          y={y(mode.value(points[active]))}
+          width={width}
+          text={`${shortDateLabel(points[active].date)}  ${formatNumber(
+            mode.value(points[active]),
+          )}${mode.unit}`}
+          detail={points[active].summary}
+        />
+      )}
       {ticks.map((index) => (
         <text
           key={points[index].date}
@@ -217,6 +299,10 @@ function ExerciseDetail({
   const last = points.at(-1);
   const delta = first && last ? mode.value(last) - mode.value(first) : 0;
   const totalSets = points.reduce((sum, point) => sum + point.sets, 0);
+  const topWeight = points.reduce(
+    (value, point) => Math.max(value, point.topWeight),
+    0,
+  );
   const recent = [...points].reverse().slice(0, 10);
 
   return (
@@ -252,7 +338,13 @@ function ExerciseDetail({
                   {formatNumber(best)}
                   <em>{mode.unit}</em>
                 </strong>
-                <span>{bestPoint ? shortDateLabel(bestPoint.date) : "-"}</span>
+                <span>
+                  {bestPoint ? shortDateLabel(bestPoint.date) : "-"}
+                  {/* 추정 1RM은 환산값이라, 실제로 든 최고 중량을 같이 적어준다. */}
+                  {mode.label === "추정 1RM" && topWeight > 0
+                    ? ` · 실제 ${formatNumber(topWeight)}kg`
+                    : ""}
+                </span>
               </div>
               <div>
                 <small>최근</small>
@@ -287,6 +379,7 @@ function ExerciseDetail({
             </div>
 
             <TrendChart points={points} mode={mode} />
+            <p className="trend-note">{mode.note}</p>
 
             <ul className="detail-log">
               {recent.map((point) => (
@@ -706,6 +799,7 @@ type TrendMode = {
   label: string;
   unit: string;
   lowerIsBetter: boolean;
+  note: string;
   value: (point: TrendPoint) => number;
 };
 
@@ -715,6 +809,7 @@ const trendMode = (metric: Metric, assisted: boolean): TrendMode => {
       label: "거리",
       unit: "km",
       lowerIsBetter: false,
+      note: "그날 기록한 거리 합계.",
       value: (point) => point.distanceKm,
     };
   if (assisted)
@@ -722,6 +817,7 @@ const trendMode = (metric: Metric, assisted: boolean): TrendMode => {
       label: "보조 중량",
       unit: "kg",
       lowerIsBetter: true,
+      note: "그날 세트 중 가장 가벼운 보조 중량. 몸에서 빼주는 무게라 낮을수록 좋아요.",
       value: (point) => point.minAssist ?? point.topWeight,
     };
   if (metric === "bodyweight")
@@ -729,12 +825,16 @@ const trendMode = (metric: Metric, assisted: boolean): TrendMode => {
       label: "최고 반복",
       unit: "회",
       lowerIsBetter: false,
+      note: "그날 한 세트에서 나온 최고 반복 수.",
       value: (point) => point.topReps,
     };
   return {
     label: "추정 1RM",
     unit: "kg",
     lowerIsBetter: false,
+    // 실제로 든 최고 중량이 아니라, 무게×반복을 1회 최대치로 환산한 값(Epley).
+    // 60×10과 70×5의 강도를 같은 자로 비교하려고 쓴다.
+    note: "추정 1RM = 중량 × (1 + 반복 ÷ 30). 그날 세트 중 가장 높은 값이고, 실제로 든 최고 중량과는 다릅니다.",
     value: (point) => point.best1RM,
   };
 };
