@@ -339,6 +339,8 @@ button { color: inherit; }
 .trend-line { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .trend-dot { fill: var(--surface, #fff); stroke: var(--ink); stroke-width: 1.4; }
 .trend-dot.last { fill: var(--accent); stroke: var(--accent); }
+.trend-axis { fill: #96968f; font: 650 8px/1 var(--font-geist-mono), monospace; }
+.trend-axis.last { fill: #55554f; }
 .detail-log { margin: 16px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .detail-log button { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; width: 100%; padding: 11px 2px; background: transparent; border: 0; border-bottom: 1px solid var(--soft-line, var(--line)); text-align: left; cursor: pointer; }
 .detail-log button:hover { background: var(--paper); }

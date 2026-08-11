@@ -114,8 +114,10 @@ function TrendChart({
   const flat = max === min;
   const span = max - min || 1;
   const inset = 14;
+  const axis = 24; // 아래 날짜 축 자리
   const width = 320;
-  const height = 116;
+  const height = 132;
+  const plot = height - axis - inset * 2;
   const x = (index: number) =>
     points.length === 1
       ? width / 2
@@ -123,11 +125,17 @@ function TrendChart({
   // 값이 전부 같으면(기록 1회 포함) 가운데 높이에 눕힌다.
   const y = (value: number) =>
     flat
-      ? height / 2
-      : height - inset - ((value - min) / span) * (height - inset * 2);
+      ? inset + plot / 2
+      : height - axis - inset - ((value - min) / span) * plot;
   const line = points
     .map((point, index) => `${x(index)},${y(mode.value(point))}`)
     .join(" ");
+
+  // 날짜는 최대 5개만. 마지막 기록에서 거꾸로 세어 항상 최신 날짜를 남긴다.
+  const gap = Math.max(1, Math.ceil(points.length / 5));
+  const ticks: number[] = [];
+  for (let index = points.length - 1; index >= 0; index -= gap)
+    ticks.unshift(index);
 
   return (
     <svg
@@ -140,11 +148,34 @@ function TrendChart({
       {points.map((point, index) => (
         <circle
           key={point.date}
-          className={index === points.length - 1 ? "trend-dot last" : "trend-dot"}
+          className={
+            index === points.length - 1 ? "trend-dot last" : "trend-dot"
+          }
           cx={x(index)}
           cy={y(mode.value(point))}
           r={index === points.length - 1 ? 4 : 2.5}
         />
+      ))}
+      {ticks.map((index) => (
+        <text
+          key={points[index].date}
+          className={
+            index === points.length - 1 ? "trend-axis last" : "trend-axis"
+          }
+          x={x(index)}
+          y={height - 8}
+          textAnchor={
+            points.length === 1
+              ? "middle"
+              : index === 0
+                ? "start"
+                : index === points.length - 1
+                  ? "end"
+                  : "middle"
+          }
+        >
+          {shortDateLabel(points[index].date)}
+        </text>
       ))}
     </svg>
   );
