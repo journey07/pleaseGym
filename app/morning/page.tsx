@@ -1,7 +1,14 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import {
+  computeMissionStats,
+  computeVision,
+  koreanDateLabel,
+  type MissionStats,
+  type VisionRow,
+} from "@/app/lib/missionStats";
 
 type Decision = "go" | "no_go";
 
@@ -39,7 +46,7 @@ type StoredSet = {
 type StoredExercise = {
   id: string;
   name: string;
-  metric?: "weight" | "distance";
+  metric?: "weight" | "bodyweight" | "distance";
   sets: StoredSet[];
 };
 
@@ -51,12 +58,6 @@ type StoredSession = {
 type StoredFavorite = {
   name?: string;
   metric?: "weight" | "distance";
-};
-
-type MissionStats = {
-  streak: number;
-  weekGoes: number;
-  totalXp: number;
 };
 
 type MorningVideo = {
@@ -243,47 +244,13 @@ const storeDecision = (decision: Decision) => {
   window.localStorage.setItem(key, JSON.stringify(current.slice(-90)));
 };
 
-const shiftDateKey = (key: string, amount: number) => {
-  const date = new Date(`${key}T12:00:00`);
-  date.setDate(date.getDate() + amount);
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-};
-
-const calculateMissionStats = (): MissionStats => {
-  const decisions = readArray<{
-    date?: string;
-    decision?: Decision;
-    xp?: number;
-  }>("first-rep-morning-decisions");
-  const activeDates = new Set(
-    decisions
-      .filter((item) => item.decision === "go" && typeof item.date === "string")
-      .map((item) => item.date as string),
-  );
-
-  readArray<StoredSession>("first-rep-history").forEach((session) => {
-    if (typeof session.date === "string")
-      activeDates.add(session.date.slice(0, 10));
+const readMissionStats = (): MissionStats =>
+  computeMissionStats({
+    sessions: readArray<StoredSession>("first-rep-history"),
+    todayKey: todayKey(),
   });
 
-  const today = todayKey();
-  let cursor = activeDates.has(today) ? today : shiftDateKey(today, -1);
-  let streak = 0;
-  while (activeDates.has(cursor) && streak < 365) {
-    streak += 1;
-    cursor = shiftDateKey(cursor, -1);
-  }
-
-  const weekGoes = Array.from({ length: 7 }, (_, index) =>
-    shiftDateKey(today, -index),
-  ).filter((key) => activeDates.has(key)).length;
-  const totalXp = decisions.reduce(
-    (sum, item) => sum + (item.decision === "go" ? (item.xp ?? 100) : 0),
-    0,
-  );
-
-  return { streak, weekGoes, totalXp };
-};
+const readStoredSessions = () => readArray<StoredSession>("first-rep-history");
 
 export default function MorningBridge() {
   const [dateLabel, setDateLabel] = useState("");
@@ -294,11 +261,10 @@ export default function MorningBridge() {
     "idle",
   );
   const [error, setError] = useState("");
-  const [missionStats, setMissionStats] = useState<MissionStats>({
-    streak: 0,
-    weekGoes: 0,
-    totalXp: 0,
-  });
+  const [missionStats, setMissionStats] = useState<MissionStats>(() =>
+    computeMissionStats({ sessions: [], todayKey: "1970-01-01" }),
+  );
+  const [visionSessions, setVisionSessions] = useState<StoredSession[]>([]);
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipProgress, setSkipProgress] = useState(0);
   const [skipHolding, setSkipHolding] = useState(false);
@@ -311,6 +277,10 @@ export default function MorningBridge() {
   const [videoNotice, setVideoNotice] = useState("");
   const [bodyweightInput, setBodyweightInput] = useState("");
   const [latestWeight, setLatestWeight] = useState<number | null>(null);
+  const vision: VisionRow[] = useMemo(
+    () => computeVision(visionSessions, latestWeight),
+    [visionSessions, latestWeight],
+  );
   const [weightSaving, setWeightSaving] = useState(false);
   const [schedule, setSchedule] = useState<{
     enabled: boolean;
@@ -326,6 +296,7 @@ export default function MorningBridge() {
   const userActedRef = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
     setDateLabel(
       new Intl.DateTimeFormat("ko-KR", {
         month: "long",
@@ -333,7 +304,12 @@ export default function MorningBridge() {
         weekday: "long",
       }).format(new Date()),
     );
-    setMissionStats(calculateMissionStats());
+    setMissionStats(readMissionStats());
+      setVisionSessions(readStoredSessions());
+    void readCoachSource().then(() => {
+      if (!cancelled) setMissionStats(readMissionStats());
+      setVisionSessions(readStoredSessions());
+    });
 
     // Restore today's committed decision so re-tapping the same one won't re-run the coach.
     const decisions = readArray<{ date?: string; decision?: Decision }>(
@@ -351,6 +327,9 @@ export default function MorningBridge() {
       setCoach(cached.coach);
       setStatus("done");
     }
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Cross-device sync: the server (Neon morning_events) is the source of truth for
@@ -378,7 +357,8 @@ export default function MorningBridge() {
 
         setTodayDecision(data.decision);
         storeDecision(data.decision); // mirror into local so streak/idempotency stay consistent
-        setMissionStats(calculateMissionStats());
+        setMissionStats(readMissionStats());
+      setVisionSessions(readStoredSessions());
         setDecision(data.decision);
 
         if (data.coach) {
@@ -677,7 +657,8 @@ export default function MorningBridge() {
     if (nextDecision !== todayDecision) {
       storeDecision(nextDecision);
       setTodayDecision(nextDecision);
-      setMissionStats(calculateMissionStats());
+      setMissionStats(readMissionStats());
+      setVisionSessions(readStoredSessions());
       // Must stay before the first await so the popup keeps its user-gesture pass.
       if (nextDecision === "go" && videos.length > 0) {
         const pick = pickRandomVideo(videos);
@@ -686,12 +667,15 @@ export default function MorningBridge() {
     }
 
     try {
+      const context = await buildCoachContext();
+      setMissionStats(readMissionStats());
+      setVisionSessions(readStoredSessions());
       const response = await fetch("/api/morning-coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           decision: nextDecision,
-          context: await buildCoachContext(),
+          context,
         }),
       });
       const data = (await response.json()) as {
@@ -769,32 +753,61 @@ export default function MorningBridge() {
           <p>{dateLabel || "오늘"}</p>
         </header>
 
-        <div className="mission-hud" aria-label="운동 퀘스트 현황">
-          <div>
-            <span className="streak-fire" aria-hidden="true">
-              ◆
+        <div className="mission-hud" aria-label="운동 루틴 현황">
+          <div className="mission-week">
+            <span className="week-dots" aria-hidden="true">
+              {Array.from({ length: missionStats.weeklyGoal }, (_, index) => (
+                <i
+                  key={index}
+                  className={
+                    index < missionStats.thisWeekCount ? "on" : undefined
+                  }
+                />
+              ))}
             </span>
+            <b>
+              {missionStats.remainingThisWeek === 0
+                ? "이번 주 다 채웠다"
+                : `이번 주 ${missionStats.remainingThisWeek}회 남았다`}
+            </b>
+          </div>
+
+          <p className="mission-streak">
+            {missionStats.streakBroken ||
+            missionStats.streakStartDate === null ? (
+              <span className="streak-broken">루틴이 끊겼다. 오늘 다시 시작</span>
+            ) : (
+              <>
+                <b>{missionStats.streakDays}일째</b>
+                <span>루틴 지키는 중</span>
+                <small>
+                  {koreanDateLabel(missionStats.streakStartDate)}부터
+                </small>
+              </>
+            )}
+          </p>
+
+          <div className="vision-card">
+            <span>3년 뒤의 나</span>
+            <ul>
+              {vision.map((row) => (
+                <li key={row.key}>
+                  <b>{row.label}</b>
+                  <em>
+                    {row.current === null ? "-" : row.current}
+                    {row.key === "pullup" && row.current !== null ? "kg 보조" : "kg"}
+                    <i aria-hidden="true">→</i>
+                    {row.key === "pullup" ? "맨몸 10개" : `${row.target}kg`}
+                  </em>
+                  <small>{row.note}</small>
+                </li>
+              ))}
+            </ul>
             <p>
-              <b>{missionStats.streak || "NEW"}</b>
-              <small>DAY STREAK</small>
+              숫자만 오른 게 아니라 보면 아는 몸이다.
+              <br />
+              주 3회는 더 이상 결심이 아니다.
             </p>
-          </div>
-          <div className="mission-progress">
-            <span>
-              <b>WEEK MISSION</b>
-              <small>{missionStats.weekGoes}/4 출석</small>
-            </span>
-            <i>
-              <em
-                style={{
-                  width: `${Math.min(100, (missionStats.weekGoes / 4) * 100)}%`,
-                }}
-              />
-            </i>
-          </div>
-          <div className="xp-total">
-            <small>TOTAL XP</small>
-            <b>{missionStats.totalXp.toLocaleString("ko-KR")}</b>
           </div>
         </div>
 
@@ -890,7 +903,6 @@ export default function MorningBridge() {
           <section className="quest-card" aria-label="오늘의 운동 퀘스트">
             <div className="quest-card-top">
               <span>MAIN QUEST · 01</span>
-              <b>+100 XP</b>
             </div>
             <div className="quest-objective">
               <span aria-hidden="true">01</span>
@@ -968,7 +980,6 @@ export default function MorningBridge() {
             <span>
               {decision === "go" ? "QUEST ACCEPTED" : "QUEST ABANDONED"}
             </span>
-            <strong>{decision === "go" ? "+100 XP" : "NO XP"}</strong>
           </div>
         )}
 

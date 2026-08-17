@@ -46,21 +46,26 @@ button { color: inherit; }
 .morning-head a > .brand-mark { width: 24px; height: 24px; }
 .morning-head b { font-size: 12px; letter-spacing: .08em; }
 .morning-head p { margin: 0; color: var(--muted); font-size: 11px; }
-.mission-hud { display: grid; grid-template-columns: auto 1fr auto; gap: 22px; align-items: center; padding: 17px 0; border-bottom: 1px solid var(--line); }
-.mission-hud > div:first-child { display: flex; align-items: center; gap: 9px; }
-.streak-fire { width: 25px; height: 25px; display: grid; place-items: center; color: white; background: var(--accent); border-radius: 7px; font-size: 10px; transform: rotate(45deg); box-shadow: 0 0 0 4px var(--accent-soft); }
-.streak-fire::first-letter { transform: rotate(-45deg); }
-.mission-hud p, .mission-hud small { margin: 0; }
-.mission-hud p { display: flex; align-items: baseline; gap: 5px; font-family: var(--font-geist-mono), monospace; }
-.mission-hud p b { color: #080808; font-size: 16px; }
-.mission-hud p small, .xp-total small { color: var(--muted); font-size: 8px; font-weight: 700; letter-spacing: .09em; }
-.mission-progress { display: grid; gap: 7px; }
-.mission-progress > span { display: flex; justify-content: space-between; gap: 12px; font: 700 8px/1 var(--font-geist-mono), monospace; letter-spacing: .08em; }
-.mission-progress > span small { color: var(--muted); }
-.mission-progress > i { height: 5px; overflow: hidden; background: #deded8; border-radius: 99px; }
-.mission-progress > i em { display: block; height: 100%; min-width: 3px; background: var(--accent); border-radius: inherit; transition: width .45s ease; }
-.xp-total { text-align: right; }
-.xp-total b { display: block; margin-top: 4px; font: 800 15px/1 var(--font-geist-mono), monospace; }
+.mission-hud { display: grid; gap: 14px; padding: 17px 0; border-bottom: 1px solid var(--line); }
+.mission-week { display: flex; align-items: center; gap: 11px; }
+.week-dots { display: flex; gap: 6px; }
+.week-dots i { width: 13px; height: 13px; border: 1.5px solid #cfcfc8; border-radius: 50%; }
+.week-dots i.on { background: var(--accent); border-color: var(--accent); }
+.mission-week b { color: #080808; font-size: 15px; letter-spacing: -.02em; }
+.mission-streak { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 9px; margin: 0; }
+.mission-streak b { color: var(--accent); font: 800 27px/1 var(--font-geist-mono), monospace; letter-spacing: -.045em; }
+.mission-streak > span { color: #191917; font-size: 15px; font-weight: 750; letter-spacing: -.02em; }
+.mission-streak small { color: var(--muted); font: 700 10px/1 var(--font-geist-mono), monospace; letter-spacing: .04em; }
+.streak-broken { color: var(--accent) !important; font-size: 15px; font-weight: 750; }
+.vision-card { padding: 15px 16px; background: #fafaf7; border: 1px solid var(--soft-line); border-radius: 10px; }
+.vision-card > span { display: block; margin-bottom: 13px; color: #080808; font-size: 18px; font-weight: 800; letter-spacing: -.035em; }
+.vision-card ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.vision-card li { display: grid; grid-template-columns: 46px minmax(0, auto) auto; justify-content: start; align-items: baseline; gap: 10px 14px; }
+.vision-card li b { color: #55554f; font-size: 11px; font-weight: 700; }
+.vision-card li em { color: #191917; font: 750 12px/1.3 var(--font-geist-mono), monospace; font-style: normal; letter-spacing: -.02em; }
+.vision-card li em i { margin: 0 6px; color: #a0a099; font-style: normal; }
+.vision-card li small { color: var(--muted); font-size: 9.5px; white-space: nowrap; }
+.vision-card > p { margin: 12px 0 0; padding-top: 11px; border-top: 1px solid var(--soft-line); color: #3c3c37; font-size: 11.5px; line-height: 1.6; }
 .bodyweight-strip { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 0; border-bottom: 1px solid var(--line); }
 .bodyweight-strip > span { display: flex; align-items: baseline; gap: 8px; color: var(--muted); font: 700 9px/1 var(--font-geist-mono), monospace; letter-spacing: .09em; }
 .bodyweight-strip > span b { color: #080808; font-size: 14px; letter-spacing: 0; }
@@ -409,9 +414,8 @@ button { color: inherit; }
   .day-lift b { display: block; font-size: 10px; }
   .day-lift strong { font-size: 10px; }
   .add-hint { display: none; }
-  .mission-hud { grid-template-columns: 1fr auto; }
-  .mission-progress { grid-column: 1 / -1; grid-row: 2; }
-  .xp-total { grid-column: 2; grid-row: 1; }
+  .vision-card li { grid-template-columns: 42px minmax(0, 1fr); }
+  .vision-card li small { grid-column: 2; white-space: normal; }
   .morning-copy { padding-top: 34px; }
   .quest-card { padding: 16px; }
   .quest-objective { gap: 12px; }
