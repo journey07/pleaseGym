@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ComponentProps,
   FormEvent,
   ReactNode,
   useEffect,
@@ -68,6 +69,340 @@ function SortableExercise({
         isDragging,
       })}
     </>
+  );
+}
+
+// 숫자 칸은 편집 중인 문자열을 그대로 들고 있는다. 값(0)만 들고 있으면
+// 지운 칸에 "0"이 다시 그려져 지울 수 없고, "0.5"처럼 0으로 시작하는 값도
+// 입력 도중에 튄다. 포커스가 빠지면 다시 모델 값을 따라간다.
+function NumberInput({
+  value,
+  onValueChange,
+  onBlur,
+  ...rest
+}: Omit<ComponentProps<"input">, "value" | "onChange"> & {
+  value: number;
+  onValueChange: (value: number) => void;
+}) {
+  const [text, setText] = useState<string | null>(null);
+  return (
+    <input
+      {...rest}
+      type="number"
+      value={text ?? (value === 0 ? "" : String(value))}
+      onChange={(event) => {
+        const raw = event.target.value;
+        setText(raw);
+        const parsed = raw === "" ? 0 : Number(raw);
+        if (Number.isFinite(parsed)) onValueChange(parsed);
+      }}
+      onBlur={(event) => {
+        setText(null);
+        onBlur?.(event);
+      }}
+    />
+  );
+}
+
+// SVG엔 자동 줄바꿈이 없어서 글자 폭을 직접 잰다. 한글·기호는 전각으로 계산.
+const textWidth = (text: string, size: number) =>
+  [...text].reduce(
+    (sum, char) => sum + size * (/[ㄱ-힝·×]/.test(char) ? 1 : 0.6),
+    0,
+  );
+
+// 누른 점 옆에 뜨는 말풍선. 위쪽에 자리가 없으면 점 아래로 내려간다.
+function TrendBubble({
+  x,
+  y,
+  width,
+  text,
+  detail,
+}: {
+  x: number;
+  y: number;
+  width: number;
+  text: string;
+  detail: string;
+}) {
+  const short = detail.length > 24 ? `${detail.slice(0, 23)}…` : detail;
+  const box = Math.max(textWidth(text, 9), textWidth(short, 7)) + 14;
+  const height = short ? 30 : 20;
+  const below = y - height - 10 < 0;
+  const top = below ? y + 10 : y - height - 10;
+  const left = Math.min(Math.max(x - box / 2, 2), width - box - 2);
+
+  return (
+    <g className="trend-bubble" pointerEvents="none">
+      <rect x={left} y={top} width={box} height={height} rx={3} />
+      <text x={left + box / 2} y={top + 12} textAnchor="middle">
+        {text}
+      </text>
+      {short && (
+        <text
+          className="trend-bubble-detail"
+          x={left + box / 2}
+          y={top + 23}
+          textAnchor="middle"
+        >
+          {short}
+        </text>
+      )}
+    </g>
+  );
+}
+
+// 세션별 대표 지표를 잇는 작은 선 그래프. 값이 하나면 점 하나만 찍는다.
+// 점을 누르면 그 세션의 날짜와 값이 말풍선으로 뜬다.
+function TrendChart({
+  points,
+  mode,
+}: {
+  points: TrendPoint[];
+  mode: TrendMode;
+}) {
+  const [active, setActive] = useState<number | null>(null);
+  const values = points.map(mode.value);
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const flat = max === min;
+  const span = max - min || 1;
+  const inset = 14;
+  const axis = 24; // 아래 날짜 축 자리
+  const width = 320;
+  const height = 132;
+  const plot = height - axis - inset * 2;
+  const x = (index: number) =>
+    points.length === 1
+      ? width / 2
+      : inset + (index / (points.length - 1)) * (width - inset * 2);
+  // 값이 전부 같으면(기록 1회 포함) 가운데 높이에 눕힌다.
+  const y = (value: number) =>
+    flat
+      ? inset + plot / 2
+      : height - axis - inset - ((value - min) / span) * plot;
+  const line = points
+    .map((point, index) => `${x(index)},${y(mode.value(point))}`)
+    .join(" ");
+
+  // 날짜는 최대 5개만. 마지막 기록에서 거꾸로 세어 항상 최신 날짜를 남긴다.
+  const gap = Math.max(1, Math.ceil(points.length / 5));
+  const ticks: number[] = [];
+  for (let index = points.length - 1; index >= 0; index -= gap)
+    ticks.unshift(index);
+
+  return (
+    <svg
+      className="trend-chart"
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label={`${mode.label} 추이 그래프`}
+    >
+      <polyline className="trend-line" points={line} />
+      {points.map((point, index) => (
+        <circle
+          key={point.date}
+          className={
+            index === points.length - 1 ? "trend-dot last" : "trend-dot"
+          }
+          cx={x(index)}
+          cy={y(mode.value(point))}
+          r={index === active ? 5 : index === points.length - 1 ? 4 : 2.5}
+        />
+      ))}
+      {/* 손가락으로도 눌리도록 점보다 넉넉한 투명 히트 영역을 겹쳐 둔다. */}
+      {points.map((point, index) => (
+        <circle
+          key={`hit-${point.date}`}
+          className="trend-hit"
+          cx={x(index)}
+          cy={y(mode.value(point))}
+          r={13}
+          tabIndex={0}
+          role="button"
+          aria-label={`${shortDateLabel(point.date)} ${mode.label} ${formatNumber(
+            mode.value(point),
+          )}${mode.unit}`}
+          onClick={() => setActive(index === active ? null : index)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            setActive(index === active ? null : index);
+          }}
+        />
+      ))}
+      {active !== null && (
+        <TrendBubble
+          x={x(active)}
+          y={y(mode.value(points[active]))}
+          width={width}
+          text={`${shortDateLabel(points[active].date)}  ${formatNumber(
+            mode.value(points[active]),
+          )}${mode.unit}`}
+          detail={points[active].summary}
+        />
+      )}
+      {ticks.map((index) => (
+        <text
+          key={points[index].date}
+          className={
+            index === points.length - 1 ? "trend-axis last" : "trend-axis"
+          }
+          x={x(index)}
+          y={height - 8}
+          textAnchor={
+            points.length === 1
+              ? "middle"
+              : index === 0
+                ? "start"
+                : index === points.length - 1
+                  ? "end"
+                  : "middle"
+          }
+        >
+          {shortDateLabel(points[index].date)}
+        </text>
+      ))}
+    </svg>
+  );
+}
+
+// 종목 하나의 추이 패널. 기록이 쌓인 뒤에야 의미가 있어서 빈 상태를 따로 둔다.
+function ExerciseDetail({
+  name,
+  metric,
+  assisted,
+  points,
+  onPickDate,
+  onClose,
+}: {
+  name: string;
+  metric: Metric;
+  assisted: boolean;
+  points: TrendPoint[];
+  onPickDate: (dateKey: string) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const mode = trendMode(metric, assisted);
+  const values = points.map(mode.value);
+  const best = values.length
+    ? mode.lowerIsBetter
+      ? Math.min(...values)
+      : Math.max(...values)
+    : 0;
+  const bestPoint = points[values.indexOf(best)];
+  const first = points[0];
+  const last = points.at(-1);
+  const delta = first && last ? mode.value(last) - mode.value(first) : 0;
+  const totalSets = points.reduce((sum, point) => sum + point.sets, 0);
+  const topWeight = points.reduce(
+    (value, point) => Math.max(value, point.topWeight),
+    0,
+  );
+  const recent = [...points].reverse().slice(0, 10);
+
+  return (
+    <div
+      className="detail-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${name} 추이`}
+      onClick={onClose}
+    >
+      <div className="detail-card" onClick={(event) => event.stopPropagation()}>
+        <div className="detail-head">
+          <div>
+            <small>{mode.label} 추이</small>
+            <h2>{name}</h2>
+          </div>
+          <button onClick={onClose} aria-label="추이 닫기">
+            ×
+          </button>
+        </div>
+
+        {points.length === 0 ? (
+          <p className="detail-empty">
+            저장된 기록이 아직 없어요. 오늘 기록을 저장하면 이 종목의 추이가
+            쌓입니다.
+          </p>
+        ) : (
+          <>
+            <div className="detail-stats">
+              <div>
+                <small>BEST</small>
+                <strong>
+                  {formatNumber(best)}
+                  <em>{mode.unit}</em>
+                </strong>
+                <span>
+                  {bestPoint ? shortDateLabel(bestPoint.date) : "-"}
+                  {/* 추정 1RM은 환산값이라, 실제로 든 최고 중량을 같이 적어준다. */}
+                  {mode.label === "추정 1RM" && topWeight > 0
+                    ? ` · 실제 ${formatNumber(topWeight)}kg`
+                    : ""}
+                </span>
+              </div>
+              <div>
+                <small>최근</small>
+                <strong>
+                  {formatNumber(last ? mode.value(last) : 0)}
+                  <em>{mode.unit}</em>
+                </strong>
+                <span>{last ? shortDateLabel(last.date) : "-"}</span>
+              </div>
+              <div>
+                <small>첫 기록 대비</small>
+                <strong className={delta === 0 ? "" : delta > 0 ? "up" : "down"}>
+                  {delta > 0 ? "+" : ""}
+                  {formatNumber(delta)}
+                  <em>{mode.unit}</em>
+                </strong>
+                <span>{points.length}회 기록</span>
+              </div>
+              <div>
+                <small>총 세트</small>
+                <strong>{totalSets}</strong>
+                <span>
+                  {metric === "distance"
+                    ? `${formatNumber(
+                        points.reduce((sum, point) => sum + point.distanceKm, 0),
+                      )}km 누적`
+                    : `${formatNumber(
+                        points.reduce((sum, point) => sum + point.volume, 0),
+                      )}kg 볼륨`}
+                </span>
+              </div>
+            </div>
+
+            <TrendChart points={points} mode={mode} />
+            <p className="trend-note">{mode.note}</p>
+
+            <ul className="detail-log">
+              {recent.map((point) => (
+                <li key={point.date}>
+                  <button onClick={() => onPickDate(point.date)}>
+                    <b>{shortDateLabel(point.date)}</b>
+                    <span>{point.summary}</span>
+                    <strong>
+                      {formatNumber(mode.value(point))}
+                      {mode.unit}
+                    </strong>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -351,6 +686,171 @@ const createExercise = (name: string, metric: Metric): Exercise => ({
   bodyPart: inferBodyPart(name),
   bodyPartManual: false,
 });
+// 직전 기록에서 세트를 그대로 가져올 때, 위 줄과 값이 같은 줄만 상속으로 둔다.
+// 균일한 세트(60×8 ×4)는 한 줄만 고쳐도 전부 따라오고, 피라미드(60/57.5/55)는
+// 그대로 남는다.
+const createExerciseFromLog = (
+  previous: Exercise,
+  name: string,
+  metric: Metric,
+): Exercise => ({
+  id: uid(),
+  name,
+  metric,
+  assisted: previous.assisted,
+  bodyPart: previous.bodyPart ?? inferBodyPart(name),
+  bodyPartManual: previous.bodyPartManual ?? false,
+  sets: previous.sets.map((set, index, all) => ({
+    id: uid(),
+    weight: set.weight,
+    reps: set.reps,
+    done: true,
+    ...(metric === "distance" ? { distanceKm: set.distanceKm ?? 0 } : {}),
+    inheritWeight: index > 0 && set.weight === all[index - 1].weight,
+    inheritReps: index > 0 && set.reps === all[index - 1].reps,
+  })),
+});
+
+// 선택한 날짜 이전에 같은 종목을 마지막으로 한 기록.
+const findLastLog = (
+  history: Session[],
+  name: string,
+  metric: Metric,
+  beforeKey: string,
+): { exercise: Exercise; date: string } | null => {
+  const normalized = normalizeExerciseName(name);
+  let latest: { exercise: Exercise; date: string } | null = null;
+  history.forEach((session) => {
+    const key = sessionDateKey(session.date);
+    if (key >= beforeKey || (latest && key <= latest.date)) return;
+    const match = session.exercises.find(
+      (exercise) =>
+        normalizeExerciseName(exercise.name) === normalized &&
+        (exercise.metric ?? "weight") === metric &&
+        exercise.sets.length > 0,
+    );
+    if (match) latest = { exercise: match, date: key };
+  });
+  return latest;
+};
+
+const shortDateLabel = (key: string) => {
+  const [, month, day] = key.split("-");
+  return `${Number(month)}/${Number(day)}`;
+};
+
+// Epley 추정 1RM. 1회는 든 무게 그대로.
+const estimateOneRepMax = (weight: number, reps: number) =>
+  weight > 0 && reps > 0 ? weight * (1 + reps / 30) : 0;
+
+type TrendPoint = {
+  date: string;
+  sets: number;
+  topWeight: number;
+  best1RM: number;
+  topReps: number;
+  totalReps: number;
+  volume: number;
+  distanceKm: number;
+  minAssist: number | null;
+  summary: string;
+};
+
+// 한 종목의 세션별 기록을 날짜 오름차순으로 정리한다.
+const buildExerciseTrend = (
+  history: Session[],
+  name: string,
+  metric: Metric,
+): TrendPoint[] => {
+  const normalized = normalizeExerciseName(name);
+  const points: TrendPoint[] = [];
+  history.forEach((session) => {
+    session.exercises.forEach((exercise) => {
+      if (
+        normalizeExerciseName(exercise.name) !== normalized ||
+        (exercise.metric ?? "weight") !== metric
+      )
+        return;
+      const sets = exercise.sets.filter((set) => set.done);
+      if (sets.length === 0) return;
+      const assist = minAssistWeight(exercise);
+      points.push({
+        date: sessionDateKey(session.date),
+        sets: sets.length,
+        topWeight: sets.reduce((value, set) => Math.max(value, set.weight), 0),
+        best1RM: sets.reduce(
+          (value, set) =>
+            Math.max(value, estimateOneRepMax(set.weight, set.reps)),
+          0,
+        ),
+        topReps: sets.reduce((value, set) => Math.max(value, set.reps), 0),
+        totalReps: sets.reduce((sum, set) => sum + set.reps, 0),
+        volume: sets.reduce((sum, set) => sum + set.weight * set.reps, 0),
+        distanceKm: sets.reduce((sum, set) => sum + (set.distanceKm ?? 0), 0),
+        minAssist: isAssistedExercise(exercise) ? assist : null,
+        summary:
+          metric === "distance"
+            ? `${formatNumber(
+                sets.reduce((sum, set) => sum + (set.distanceKm ?? 0), 0),
+              )}km`
+            : sets
+                .map((set) =>
+                  set.weight > 0
+                    ? `${formatNumber(set.weight)}×${set.reps}`
+                    : `${set.reps}회`,
+                )
+                .join(" · "),
+      });
+    });
+  });
+  return points.sort((a, b) => a.date.localeCompare(b.date));
+};
+
+// 종목 성격에 맞는 대표 지표 하나를 고른다. 보조 종목은 "적을수록 좋음".
+type TrendMode = {
+  label: string;
+  unit: string;
+  lowerIsBetter: boolean;
+  note: string;
+  value: (point: TrendPoint) => number;
+};
+
+const trendMode = (metric: Metric, assisted: boolean): TrendMode => {
+  if (metric === "distance")
+    return {
+      label: "거리",
+      unit: "km",
+      lowerIsBetter: false,
+      note: "그날 기록한 거리 합계.",
+      value: (point) => point.distanceKm,
+    };
+  if (assisted)
+    return {
+      label: "보조 중량",
+      unit: "kg",
+      lowerIsBetter: true,
+      note: "그날 세트 중 가장 가벼운 보조 중량. 몸에서 빼주는 무게라 낮을수록 좋아요.",
+      value: (point) => point.minAssist ?? point.topWeight,
+    };
+  if (metric === "bodyweight")
+    return {
+      label: "최고 반복",
+      unit: "회",
+      lowerIsBetter: false,
+      note: "그날 한 세트에서 나온 최고 반복 수.",
+      value: (point) => point.topReps,
+    };
+  return {
+    label: "추정 1RM",
+    unit: "kg",
+    lowerIsBetter: false,
+    // 실제로 든 최고 중량이 아니라, 무게×반복을 1회 최대치로 환산한 값(Epley).
+    // 60×10과 70×5의 강도를 같은 자로 비교하려고 쓴다.
+    note: "추정 1RM = 중량 × (1 + 반복 ÷ 30). 그날 세트 중 가장 높은 값이고, 실제로 든 최고 중량과는 다릅니다.",
+    value: (point) => point.best1RM,
+  };
+};
+
 const prepareSetForSave = (set: WorkoutSet): WorkoutSet => {
   const persisted = { ...set, done: true };
   delete persisted.inheritWeight;
@@ -388,6 +888,11 @@ export default function Home() {
     "idle" | "loading" | "error"
   >("idle");
   const [reportError, setReportError] = useState("");
+  const [detailTarget, setDetailTarget] = useState<{
+    name: string;
+    metric: Metric;
+    assisted: boolean;
+  } | null>(null);
   const clientReady = useSyncExternalStore(
     subscribeToHydration,
     () => true,
@@ -687,6 +1192,14 @@ export default function Home() {
     };
   }, [draft]);
 
+  const detailPoints = useMemo(
+    () =>
+      detailTarget
+        ? buildExerciseTrend(history, detailTarget.name, detailTarget.metric)
+        : [],
+    [history, detailTarget],
+  );
+
   const coachInsight = useMemo(() => {
     if (monthSessions.length === 0)
       return "첫 기록을 남기면 다음 운동의 중량과 반복을 제안할게요.";
@@ -740,10 +1253,21 @@ export default function Home() {
       setToast("이미 이날의 기록에 추가된 운동이에요.");
       return false;
     }
+    // 표기가 달라도(띄어쓰기 등) 기존 종목이면 정본 이름으로 저장한다.
     const canonicalName =
       canonicalExerciseNames.get(normalizedName) ?? trimmedName;
-    setDraft((current) => [...current, createExercise(canonicalName, metric)]);
+    // 해본 적 있는 종목이면 직전 기록의 세트를 그대로 깔아준다. 대부분은
+    // 숫자를 새로 치지 않고 무게만 조금 손보면 끝난다.
+    const previous = findLastLog(history, canonicalName, metric, selectedDate);
+    setDraft((current) => [
+      ...current,
+      previous
+        ? createExerciseFromLog(previous.exercise, canonicalName, metric)
+        : createExercise(canonicalName, metric),
+    ]);
     setDirty(true);
+    if (previous)
+      setToast(`${shortDateLabel(previous.date)} 기록을 불러왔어요.`);
     return true;
   };
 
@@ -845,6 +1369,10 @@ export default function Home() {
               ...blankSet(),
               weight: previous?.weight ?? 0,
               reps: previous?.reps ?? 8,
+              // 기본 4세트와 똑같이 윗줄을 따라가게 둔다. 이 플래그가 없으면
+              // 추가한 줄만 고정돼서 위에서 고친 무게·횟수가 내려오지 않는다.
+              inheritWeight: previous !== undefined,
+              inheritReps: previous !== undefined,
             },
           ],
         };
@@ -898,6 +1426,18 @@ export default function Home() {
       }),
     );
     setDirty(true);
+  };
+
+  // ± 버튼도 updateSet을 타므로 아래 줄로 이어지는 상속 규칙이 그대로 적용된다.
+  const stepReps = (
+    exerciseId: string,
+    setId: string,
+    current: number,
+    delta: number,
+  ) => {
+    const next = Math.max(0, Math.round((current || 0) + delta));
+    if (next === current) return;
+    updateSet(exerciseId, setId, { reps: next });
   };
 
   const removeSet = (exerciseId: string, setId: string) => {
@@ -1430,6 +1970,22 @@ export default function Home() {
                                       : `MAX ${formatNumber(max)}kg`}
                               </small>
                               <button
+                                className="trend-toggle"
+                                onClick={() =>
+                                  setDetailTarget({
+                                    name: exercise.name,
+                                    metric: exercise.metric ?? "weight",
+                                    assisted: isAssistedExercise(exercise),
+                                  })
+                                }
+                                aria-label={`${exercise.name} 기록 추이 보기`}
+                                title="기록 추이"
+                              >
+                                <svg viewBox="0 0 14 14" aria-hidden="true">
+                                  <polyline points="1,10 5,6 8,8.5 13,2" />
+                                </svg>
+                              </button>
+                              <button
                                 className={`favorite-toggle ${isFavorite(exercise) ? "active" : ""}`}
                                 onClick={() => toggleFavorite(exercise)}
                                 aria-label={`${exercise.name} 즐겨찾기 ${isFavorite(exercise) ? "해제" : "등록"}`}
@@ -1491,19 +2047,17 @@ export default function Home() {
                             {isDistance ? (
                               <div className="distance-entry">
                                 <span>DISTANCE</span>
-                                <input
-                                  type="number"
+                                <NumberInput
                                   min="0"
                                   step="0.1"
                                   inputMode="decimal"
+                                  placeholder="0"
                                   value={exercise.sets[0]?.distanceKm ?? 0}
-                                  onChange={(event) =>
+                                  onValueChange={(distanceKm) =>
                                     updateSet(
                                       exercise.id,
                                       exercise.sets[0].id,
-                                      {
-                                        distanceKm: Number(event.target.value),
-                                      },
+                                      { distanceKm },
                                     )
                                   }
                                   aria-label={`${exercise.name} 거리`}
@@ -1527,19 +2081,15 @@ export default function Home() {
                                 {exercise.sets.map((set, setIndex) => (
                                   <div className="set-entry" key={set.id}>
                                     <b>{setIndex + 1}</b>
-                                    <input
-                                      type="number"
+                                    <NumberInput
                                       min="0"
                                       step="0.5"
                                       inputMode="decimal"
                                       placeholder="0"
-                                      value={set.weight === 0 ? "" : set.weight}
-                                      onChange={(event) =>
+                                      value={set.weight}
+                                      onValueChange={(weight) =>
                                         updateSet(exercise.id, set.id, {
-                                          weight:
-                                            event.target.value === ""
-                                              ? 0
-                                              : Number(event.target.value),
+                                          weight,
                                         })
                                       }
                                       aria-label={`${exercise.name} ${setIndex + 1}세트 ${
@@ -1550,19 +2100,51 @@ export default function Home() {
                                           : "중량"
                                       }`}
                                     />
-                                    <input
-                                      type="number"
-                                      min="1"
-                                      step="1"
-                                      inputMode="numeric"
-                                      value={set.reps}
-                                      onChange={(event) =>
-                                        updateSet(exercise.id, set.id, {
-                                          reps: Number(event.target.value),
-                                        })
-                                      }
-                                      aria-label={`${exercise.name} ${setIndex + 1}세트 반복`}
-                                    />
+                                    <div className="reps-field">
+                                      <button
+                                        type="button"
+                                        className="reps-step"
+                                        onClick={() =>
+                                          stepReps(
+                                            exercise.id,
+                                            set.id,
+                                            set.reps,
+                                            -1,
+                                          )
+                                        }
+                                        aria-label={`${setIndex + 1}세트 반복 1 줄이기`}
+                                      >
+                                        −
+                                      </button>
+                                      <NumberInput
+                                        min="1"
+                                        step="1"
+                                        inputMode="numeric"
+                                        placeholder="0"
+                                        value={set.reps}
+                                        onValueChange={(reps) =>
+                                          updateSet(exercise.id, set.id, {
+                                            reps,
+                                          })
+                                        }
+                                        aria-label={`${exercise.name} ${setIndex + 1}세트 반복`}
+                                      />
+                                      <button
+                                        type="button"
+                                        className="reps-step"
+                                        onClick={() =>
+                                          stepReps(
+                                            exercise.id,
+                                            set.id,
+                                            set.reps,
+                                            1,
+                                          )
+                                        }
+                                        aria-label={`${setIndex + 1}세트 반복 1 늘리기`}
+                                      >
+                                        ＋
+                                      </button>
+                                    </div>
                                     <button
                                       onClick={() =>
                                         removeSet(exercise.id, set.id)
@@ -1691,6 +2273,22 @@ export default function Home() {
           </div>
         </aside>
       </div>
+
+      {detailTarget && (
+        <ExerciseDetail
+          name={detailTarget.name}
+          metric={detailTarget.metric}
+          assisted={detailTarget.assisted}
+          points={detailPoints}
+          onPickDate={(dateKey) => {
+            const date = dateFromKey(dateKey);
+            setVisibleMonth(new Date(date.getFullYear(), date.getMonth(), 1));
+            setSelectedDate(dateKey);
+            setDetailTarget(null);
+          }}
+          onClose={() => setDetailTarget(null)}
+        />
+      )}
 
       {toast && (
         <div className="toast" role="status">
