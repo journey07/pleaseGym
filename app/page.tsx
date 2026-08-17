@@ -1595,7 +1595,7 @@ export default function Home() {
         <p>운동을 기억하는 가장 단순한 방법.</p>
         <div className="header-actions">
           <Link className="morning-button" href="/morning">
-            MORNING
+            BRIEFING
           </Link>
           <button className="today-button" onClick={goToday}>
             오늘

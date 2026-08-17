@@ -840,7 +840,7 @@ export default function MorningBridge() {
         <div className={`routine-setting ${schedule.enabled ? "" : "off"}`}>
           <div className="routine-setting-main">
             <div className="routine-setting-copy">
-              <span>MORNING ALARM</span>
+              <span>ALARM</span>
               <b>
                 {schedule.enabled
                   ? `매일 ${schedule.hour < 12 ? "오전" : "오후"} ${pad(
@@ -1066,7 +1066,7 @@ export default function MorningBridge() {
 
         <section className="video-section" aria-label="아침 영상 목록">
           <div className="video-head">
-            <span>MORNING VIDEO</span>
+            <span>VIDEO</span>
             <button
               className="video-edit-toggle"
               onClick={() => setVideoEditOpen((open) => !open)}
