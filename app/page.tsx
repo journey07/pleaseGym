@@ -27,6 +27,10 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { BodyPart, BODY_PARTS, inferBodyPart } from "./lib/bodyPart";
+import {
+  canonicalNameMap,
+  normalizeExerciseName,
+} from "./lib/exerciseName";
 
 type SortableRenderProps = {
   setNodeRef: (node: HTMLElement | null) => void;
@@ -140,6 +144,14 @@ type TrainingReport = {
   frequencyComment: string;
   // 신규 섹션 — 구(舊) 캐시엔 없으므로 optional(렌더 시 null-guard).
   balanceSummary?: string;
+  upperBody?: string;
+  lowerBody?: string;
+  efficiencyVerdict?: string;
+  exerciseSelection?: Array<{
+    name: string;
+    verdict: "keep" | "swap" | "drop";
+    reason: string;
+  }>;
   neglectNote?: string;
   bodyweightNote?: string;
   liftAnalysis: Array<{
@@ -345,8 +357,6 @@ const prepareSetForSave = (set: WorkoutSet): WorkoutSet => {
   delete persisted.inheritReps;
   return persisted;
 };
-const normalizeExerciseName = (name: string) =>
-  name.trim().toLocaleLowerCase("ko-KR");
 const defaultFavorites: FavoriteExercise[] = [
   { id: "favorite-squat", name: "백 스쿼트", metric: "weight" },
   { id: "favorite-bench", name: "벤치 프레스", metric: "weight" },
@@ -607,6 +617,19 @@ export default function Home() {
     );
   }, [history, visibleMonth]);
 
+  const canonicalExerciseNames = useMemo(
+    () =>
+      canonicalNameMap([
+        ...[...history]
+          .sort((a, b) => a.date.localeCompare(b.date))
+          .flatMap((session) =>
+            session.exercises.map((exercise) => exercise.name),
+          ),
+        ...favorites.map((favorite) => favorite.name),
+      ]),
+    [history, favorites],
+  );
+
   const monthStats = useMemo(() => {
     const sets = monthSessions.flatMap((session) =>
       session.exercises
@@ -670,17 +693,22 @@ export default function Home() {
     const exerciseCounts = new Map<string, number>();
     monthSessions.forEach((session) =>
       session.exercises.forEach((exercise) => {
+        const normalizedName = normalizeExerciseName(exercise.name);
+        if (!normalizedName) return;
         exerciseCounts.set(
-          exercise.name,
-          (exerciseCounts.get(exercise.name) ?? 0) + 1,
+          normalizedName,
+          (exerciseCounts.get(normalizedName) ?? 0) + 1,
         );
       }),
     );
     const mostFrequent = [...exerciseCounts.entries()].sort(
       (a, b) => b[1] - a[1],
     )[0];
-    return `${visibleMonth.getMonth() + 1}월 ${monthSessions.length}회 완료. ${mostFrequent?.[0] ?? "운동"}을 가장 꾸준히 기록했어요.`;
-  }, [monthSessions, visibleMonth]);
+    const mostFrequentName = mostFrequent
+      ? canonicalExerciseNames.get(mostFrequent[0])
+      : null;
+    return `${visibleMonth.getMonth() + 1}월 ${monthSessions.length}회 완료. ${mostFrequentName ?? "운동"}을 가장 꾸준히 기록했어요.`;
+  }, [canonicalExerciseNames, monthSessions, visibleMonth]);
 
   const selectDate = (key: string) => {
     setSelectedDate(key);
@@ -712,7 +740,9 @@ export default function Home() {
       setToast("이미 이날의 기록에 추가된 운동이에요.");
       return false;
     }
-    setDraft((current) => [...current, createExercise(trimmedName, metric)]);
+    const canonicalName =
+      canonicalExerciseNames.get(normalizedName) ?? trimmedName;
+    setDraft((current) => [...current, createExercise(canonicalName, metric)]);
     setDirty(true);
     return true;
   };
@@ -1104,10 +1134,49 @@ export default function Home() {
                 <p>{report.balanceSummary}</p>
               </div>
             )}
+            {report.upperBody && (
+              <div className="report-section">
+                <span>상체 진단</span>
+                <p>{report.upperBody}</p>
+              </div>
+            )}
+            {report.lowerBody && (
+              <div className="report-section">
+                <span>하체 진단</span>
+                <p>{report.lowerBody}</p>
+              </div>
+            )}
             {report.neglectNote && (
               <div className="report-section report-section-warn">
                 <span>방치 부위</span>
                 <p>{report.neglectNote}</p>
+              </div>
+            )}
+            {(report.efficiencyVerdict ||
+              (report.exerciseSelection?.length ?? 0) > 0) && (
+              <div className="report-picks">
+                <span>운동 선택</span>
+                {report.efficiencyVerdict && (
+                  <p>{report.efficiencyVerdict}</p>
+                )}
+                {report.exerciseSelection?.map((pick, pickIndex) => (
+                  <div
+                    className="report-pick"
+                    key={`${pick.name}-${pickIndex}`}
+                  >
+                    <span className={`pick-${pick.verdict}`}>
+                      {pick.verdict === "keep"
+                        ? "유지"
+                        : pick.verdict === "swap"
+                          ? "교체"
+                          : "제외"}
+                    </span>
+                    <div>
+                      <b>{pick.name}</b>
+                      <p>{pick.reason}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
             {report.bodyweightNote && (

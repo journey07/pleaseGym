@@ -5,8 +5,14 @@ import { morningEvents, userState } from "@/db/schema";
 import {
   computeBodyPartStats,
   neglectedParts,
+  type StatExercise,
   type StatSession,
 } from "@/app/lib/bodyPartStats";
+import { inferBodyPart, type BodyPart } from "@/app/lib/bodyPart";
+import {
+  canonicalNameMap,
+  normalizeExerciseName,
+} from "@/app/lib/exerciseName";
 
 // Always run per-request: the GET returns today's decision from the DB, which must
 // never be statically cached (parity with app/api/morning-videos/route.ts).
@@ -16,6 +22,19 @@ export const dynamic = "force-dynamic";
 const OPENAI_MODEL = "gpt-5.6-luna";
 
 type Decision = "go" | "no_go";
+type WorkoutSplit = "upper" | "lower" | "full" | "cardio";
+type SuggestedSplit = Exclude<WorkoutSplit, "cardio">;
+
+type LastSameSplitExercise = {
+  name: string;
+  metric: "weight" | "bodyweight" | "distance";
+  assisted: boolean;
+  sets: number;
+  topWeight: number;
+  repsAtTop: number;
+  lastDate: string;
+  suggested: string;
+};
 
 type MorningCoachResponse = {
   decision: Decision;
@@ -24,6 +43,17 @@ type MorningCoachResponse = {
   nextAction: "start" | "minimum" | "rest";
   safetyNote: string;
   progressNote: string;
+  todaySplit: SuggestedSplit | "rest";
+  todayPlan: Array<{
+    name: string;
+    target: string;
+    note: string;
+    lastDate: string;
+  }>;
+};
+
+type MorningCoachModelResponse = Omit<MorningCoachResponse, "todayPlan"> & {
+  todayPlan: Array<{ note: string }>;
 };
 
 type CoachMemoryEntry = {
@@ -53,6 +83,22 @@ const responseSchema = {
     nextAction: { type: "string", enum: ["start", "minimum", "rest"] },
     safetyNote: { type: "string" },
     progressNote: { type: "string" },
+    todaySplit: {
+      type: "string",
+      enum: ["upper", "lower", "full", "rest"],
+    },
+    todayPlan: {
+      type: "array",
+      maxItems: 8,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          note: { type: "string" },
+        },
+        required: ["note"],
+      },
+    },
   },
   required: [
     "decision",
@@ -61,6 +107,8 @@ const responseSchema = {
     "nextAction",
     "safetyNote",
     "progressNote",
+    "todaySplit",
+    "todayPlan",
   ],
 } as const;
 
@@ -76,16 +124,24 @@ const systemPrompt = `당신은 EVERYONE BUT YOU의 불꽃 스파르타 아침 P
 - neglected: 방치 부위 목록(28일 공백이거나 10일+ 안 함). 이게 있으면 우선 콕 집어라.
 - bodyweight: { latest(kg), deltaVs4wk(4주 전 대비 증감kg, null=비교불가) } 또는 null.
 - recentCheckins: 최근 7일 go/no_go 이력. coachMemory: 지난 코칭 메모.
+- recentSplits: 최근 6세션의 { date, split(upper/lower/full/cardio), exercises }. 상체와 하체를 번갈아 했는지 파악하는 근거다.
+- suggestedSplit: 서버가 최근 분할과 부위별 공백으로 계산한 오늘 권장 분할. 모델이 바꾸지 않는다.
+- lastSameSplit: 오늘 계획의 기준이 되는 최근 세션의 실제 종목별 { name, metric, assisted, sets, topWeight, repsAtTop, lastDate, suggested }. 서버가 name과 suggested를 오늘 계획에 직접 넣으므로 모델은 참고만 한다.
 
 작성 규칙(스파르타 톤 유지):
 - 한국어로 "가자","쥐어짜","챔피언" 같은 끌어올리는 표현 OK. 비아냥·모욕·비난 금지.
-- **message(핵심, 3~4문장)**: ① 몸 스냅샷 1줄(어디 편중/어디 방치를 bodyParts 근거로) → ② 최근 대비 피드백 1개(올라간/정체된 부위나 종목 콕) → ③ 오늘의 구체 처방 1개(방치·약점 부위를 채우는 종목 + 강도 방향). go면 오늘 처방, no_go면 회복 방향.
+- **message(핵심, 3~4문장)**: ① 몸 스냅샷 1줄(어디 편중/어디 방치를 bodyParts 근거로) → ② 최근 대비 피드백 1개(올라간/정체된 부위나 종목 콕) → ③ 오늘 분할과 무게 방향 한 줄(예: "오늘은 하체, 스쿼트 +2.5kg"). go면 오늘 처방, no_go면 회복 방향. 세부 종목별 조언은 todayPlan의 note에 쓴다.
 - **progressNote(왜, 1~2문장)**: 그 처방/경고가 왜 사용자의 두께·너비 목표에 필요한지 원리를 설명하라(해부/근비대 논리). 예: "측면 삼각근이 어깨를 옆으로 벌려 V실루엣을 만든다", "데드/기립근 없으면 등 두께가 안 큰다". no_go면 죄책감 없는 짧은 격려 한 줄 또는 "".
 - 관찰된 사실만 인용, 수치 지어내기 금지. bodyParts가 전부 비어 있으면(첫 기록) "오늘이 시작, 첫 데이터 만들자"로.
 - 점진적 과부하: 무게는 최근 최고중량 5% 이내 증량만. 1RM 실측 테스트 금지. 통증 진단·치료 금지(위험한 통증은 중단+전문가 안내).
+- go면 todaySplit은 suggestedSplit 그대로다. todayPlan에는 lastSameSplit 순서대로 최대 8개의 note만 반환한다. name과 target은 반환하지 않는다. lastSameSplit이 비었으면 todayPlan=[]로 두고 message에서 "첫 기록 만들자"고 한다.
+- 종목을 늘리지 않는다. 시간 대비 효율상 교체가 필요하면 todayPlan의 note 한 곳에만 "X 대신 Y"를 명시할 수 있다.
+- 교체는 수평밀기·수직밀기·수평당기기·수직당기기·스쿼트·힙힌지·종아리 패턴의 빈칸을 중복·저효율 종목과 맞바꿀 때만 제안한다. 고립운동을 일괄 저효율로 판정하지 않는다.
+- no_go면 todaySplit="rest", todayPlan=[]로 둔다.
+- coachMemory와 recentCheckins을 보고 연속 출석이나 정체가 실제로 보일 때만 언급한다.
 - bodyweight가 있으면: 벌크 목표상 체중 정체(deltaVs4wk≤0)면 "볼륨보다 식사부터"를 한 번 짚어도 좋다. 없으면 "체중도 기록하자" 정도만.
 - nextAction: go면 start(운동 시작), no_go면 minimum(5분 이하 가벼운 것) 또는 rest.
-- headline 20자 이내, safetyNote 한 문장. 운동 목록(exercises)은 반환하지 않는다.`;
+- headline 20자 이내, safetyNote 한 문장. exercises 필드는 반환하지 않는다. todayPlan의 각 object에는 note만 반환한다.`;
 
 const getRuntimeSecret = (name: "OPENAI_API_KEY") => process.env[name];
 
@@ -103,6 +159,13 @@ const shiftSeoulDateKey = (days: number) => {
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
 };
+
+const daysBetweenDateKeys = (from: string, to: string) =>
+  Math.floor(
+    (Date.parse(`${to}T00:00:00Z`) -
+      Date.parse(`${from}T00:00:00Z`)) /
+      86_400_000,
+  );
 
 const ownerId = () => process.env.FIRST_REP_OWNER_ID ?? "local-owner";
 
@@ -130,7 +193,57 @@ const isMorningCoachResponse = (
       candidate.nextAction === "minimum" ||
       candidate.nextAction === "rest") &&
     typeof candidate.safetyNote === "string" &&
-    typeof candidate.progressNote === "string"
+    typeof candidate.progressNote === "string" &&
+    (candidate.todaySplit === "upper" ||
+      candidate.todaySplit === "lower" ||
+      candidate.todaySplit === "full" ||
+      candidate.todaySplit === "rest") &&
+    Array.isArray(candidate.todayPlan) &&
+    candidate.todayPlan.length <= 8 &&
+    candidate.todayPlan.every(
+      (item) =>
+        !!item &&
+        typeof item === "object" &&
+        typeof item.name === "string" &&
+        typeof item.target === "string" &&
+        typeof item.note === "string" &&
+        typeof item.lastDate === "string",
+    ) &&
+    (candidate.decision === "no_go"
+      ? candidate.todaySplit === "rest" && candidate.todayPlan.length === 0
+      : candidate.todaySplit !== "rest")
+  );
+};
+
+const isMorningCoachModelResponse = (
+  value: unknown,
+): value is MorningCoachModelResponse => {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<MorningCoachModelResponse>;
+  return (
+    (candidate.decision === "go" || candidate.decision === "no_go") &&
+    typeof candidate.headline === "string" &&
+    typeof candidate.message === "string" &&
+    (candidate.nextAction === "start" ||
+      candidate.nextAction === "minimum" ||
+      candidate.nextAction === "rest") &&
+    typeof candidate.safetyNote === "string" &&
+    typeof candidate.progressNote === "string" &&
+    (candidate.todaySplit === "upper" ||
+      candidate.todaySplit === "lower" ||
+      candidate.todaySplit === "full" ||
+      candidate.todaySplit === "rest") &&
+    Array.isArray(candidate.todayPlan) &&
+    candidate.todayPlan.length <= 8 &&
+    candidate.todayPlan.every(
+      (item) =>
+        !!item &&
+        typeof item === "object" &&
+        typeof item.note === "string",
+    ) &&
+    (candidate.decision === "no_go"
+      ? candidate.todaySplit === "rest"
+      : candidate.todaySplit !== "rest")
   );
 };
 
@@ -260,6 +373,145 @@ type CoachStats = {
   }>;
   neglected: string[];
   bodyweight: { latest: number; deltaVs4wk: number | null } | null;
+  recentSplits: Array<{
+    date: string;
+    split: WorkoutSplit;
+    exercises: string[];
+  }>;
+  suggestedSplit: SuggestedSplit;
+  lastSameSplit: LastSameSplitExercise[];
+};
+
+const UPPER_PARTS: BodyPart[] = ["가슴", "등", "어깨", "팔"];
+const LOWER_PARTS: BodyPart[] = ["허벅지", "종아리", "허리"];
+
+const completedSets = (exercise: StatExercise) =>
+  (exercise.sets ?? []).filter((set) => set?.done !== false);
+
+const splitOf = (session: StatSession): WorkoutSplit => {
+  let upperSets = 0;
+  let lowerSets = 0;
+  let strengthSets = 0;
+  let distanceSets = 0;
+
+  for (const exercise of session.exercises ?? []) {
+    const sets = completedSets(exercise).length;
+    if (sets === 0) continue;
+    if (exercise.metric === "distance") {
+      distanceSets += sets;
+      continue;
+    }
+    strengthSets += sets;
+    const part = exercise.bodyPart ?? inferBodyPart(String(exercise.name ?? ""));
+    if (UPPER_PARTS.includes(part)) upperSets += sets;
+    if (LOWER_PARTS.includes(part)) lowerSets += sets;
+  }
+
+  const classifiedSets = upperSets + lowerSets;
+  if (strengthSets === 0 && distanceSets > 0) return "cardio";
+  if (classifiedSets > 0 && upperSets / classifiedSets >= 0.7)
+    return "upper";
+  if (classifiedSets > 0 && lowerSets / classifiedSets >= 0.7)
+    return "lower";
+  return "full";
+};
+
+const formatTargetNumber = (value: number) =>
+  Number.isInteger(value)
+    ? String(value)
+    : String(Math.round(value * 100) / 100);
+
+const progressionFor = (
+  metric: LastSameSplitExercise["metric"],
+  assisted: boolean,
+  topWeight: number,
+  repsAtTop: number,
+) => {
+  if (metric === "distance") return "제안 없음";
+  if (metric === "bodyweight" && assisted) {
+    const nextWeight = Math.max(0, topWeight - 2.5);
+    return `보조 ${formatTargetNumber(nextWeight)}kg × ${repsAtTop}`;
+  }
+  if (metric === "bodyweight") return `${repsAtTop + 1}회`;
+  if (topWeight <= 0) return `${repsAtTop + 1}회`;
+  if (repsAtTop >= 8) {
+    const nextWeight =
+      Math.floor(Math.min(topWeight + 2.5, topWeight * 1.05) * 2) / 2;
+    return `${formatTargetNumber(nextWeight)}kg × ${repsAtTop}`;
+  }
+  return `${formatTargetNumber(topWeight)}kg × ${repsAtTop + 1}`;
+};
+
+const planExercise = (
+  exercise: StatExercise,
+  lastDate: string,
+  canonicalNames: Map<string, string>,
+): LastSameSplitExercise | null => {
+  const originalName = String(exercise.name ?? "").trim();
+  if (!originalName) return null;
+  const name =
+    canonicalNames.get(normalizeExerciseName(originalName)) ?? originalName;
+  const metric =
+    exercise.metric === "distance"
+      ? "distance"
+      : exercise.metric === "bodyweight"
+        ? "bodyweight"
+        : "weight";
+  const assisted = exercise.assisted === true;
+  const sets = completedSets(exercise).filter((set) => {
+    if (metric === "distance") return Number(set.distanceKm) > 0;
+    return Number(set.reps) > 0;
+  });
+  if (sets.length === 0) return null;
+
+  let topWeight = 0;
+  let repsAtTop = 0;
+  if (metric === "bodyweight" && !assisted) {
+    repsAtTop = sets.reduce(
+      (best, set) => Math.max(best, Number(set.reps) || 0),
+      0,
+    );
+  } else if (metric !== "distance") {
+    const weights = sets.map((set) => Number(set.weight) || 0);
+    const positiveWeights = weights.filter((weight) => weight > 0);
+    topWeight = assisted
+      ? positiveWeights.length > 0
+        ? Math.min(...positiveWeights)
+        : 0
+      : Math.max(...weights);
+    repsAtTop = sets.reduce(
+      (best, set) =>
+        (Number(set.weight) || 0) === topWeight
+          ? Math.max(best, Number(set.reps) || 0)
+          : best,
+      0,
+    );
+  }
+
+  return {
+    name,
+    metric,
+    assisted,
+    sets: sets.length,
+    topWeight,
+    repsAtTop,
+    lastDate,
+    suggested: progressionFor(metric, assisted, topWeight, repsAtTop),
+  };
+};
+
+const olderSplit = (bodyParts: CoachStats["bodyParts"]): SuggestedSplit => {
+  const averageAge = (parts: BodyPart[]) => {
+    const ages = parts.flatMap((part) => {
+      const age = bodyParts.find((stat) => stat.part === part)?.daysSinceLast;
+      return age === null || age === undefined ? [] : [age];
+    });
+    if (ages.length === 0) return 0;
+    return ages.reduce((sum, age) => sum + age, 0) / ages.length;
+  };
+  return averageAge(LOWER_PARTS) > averageAge(UPPER_PARTS)
+    ? "lower"
+    : "upper";
 };
 
 async function getCoachStats(): Promise<CoachStats | null> {
@@ -286,6 +538,82 @@ async function getCoachStats(): Promise<CoachStats | null> {
       daysSinceLast: s.daysSinceLast,
       trend: s.trend,
     }));
+    const sortedSessions = history
+      .filter(
+        (session) =>
+          typeof session?.date === "string" &&
+          Array.isArray(session.exercises),
+      )
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    const canonicalNames = canonicalNameMap(
+      [...sortedSessions].reverse().flatMap((session) =>
+        (session.exercises ?? []).map((exercise) =>
+          String(exercise.name ?? "").trim(),
+        ),
+      ),
+    );
+    const sessionsWithSplits = sortedSessions.map((session) => ({
+      session,
+      date: String(session.date).slice(0, 10),
+      split: splitOf(session),
+    }));
+    const recentSplits = sessionsWithSplits.slice(0, 6).map((item) => ({
+      date: item.date,
+      split: item.split,
+      exercises: Array.from(
+        new Map(
+          (item.session.exercises ?? [])
+            .filter((exercise) => completedSets(exercise).length > 0)
+            .map((exercise) => {
+              const name = String(exercise.name ?? "").trim();
+              const normalizedName = normalizeExerciseName(name);
+              return [
+                normalizedName,
+                canonicalNames.get(normalizedName) ?? name,
+              ] as const;
+            })
+            .filter(([normalizedName]) => normalizedName),
+        ).values(),
+      ),
+    }));
+    const latestStrengthSplit = sessionsWithSplits.find(
+      (item) => item.split !== "cardio",
+    )?.split;
+    const suggestedSplit: SuggestedSplit =
+      latestStrengthSplit === "upper"
+        ? "lower"
+        : latestStrengthSplit === "lower"
+          ? "upper"
+          : olderSplit(bodyParts);
+    const sameSplitSession =
+      sessionsWithSplits.find((item) => item.split === suggestedSplit) ??
+      sessionsWithSplits.find((item) => item.split !== "cardio");
+    const sameSplitAge = sameSplitSession
+      ? daysBetweenDateKeys(sameSplitSession.date, today)
+      : Number.POSITIVE_INFINITY;
+    const lastSameSplit =
+      sameSplitSession && sameSplitAge >= 0 && sameSplitAge <= 60
+        ? (sameSplitSession.session.exercises ?? []).reduce<
+            LastSameSplitExercise[]
+          >((planned, exercise) => {
+            const item = planExercise(
+              exercise,
+              sameSplitSession.date,
+              canonicalNames,
+            );
+            if (!item) return planned;
+            const normalizedName = normalizeExerciseName(item.name);
+            if (
+              planned.some(
+                (existing) =>
+                  normalizeExerciseName(existing.name) === normalizedName,
+              )
+            )
+              return planned;
+            planned.push(item);
+            return planned;
+          }, [])
+        : [];
 
     const bwLog = (Array.isArray(row?.bw) ? row.bw : []).filter(
       (e): e is { date: string; kg: number } =>
@@ -306,7 +634,14 @@ async function getCoachStats(): Promise<CoachStats | null> {
       };
     }
 
-    return { bodyParts, neglected: neglectedParts(stats), bodyweight };
+    return {
+      bodyParts,
+      neglected: neglectedParts(stats),
+      bodyweight,
+      recentSplits,
+      suggestedSplit,
+      lastSameSplit,
+    };
   } catch {
     return null;
   }
@@ -381,7 +716,7 @@ async function generateCoachPlan(
         model: OPENAI_MODEL,
         store: false,
         reasoning: { effort: "medium" },
-        max_output_tokens: 1400,
+        max_output_tokens: 2000,
         input: [
           { role: "developer", content: systemPrompt },
           {
@@ -391,6 +726,9 @@ async function generateCoachPlan(
               bodyParts: coachStats?.bodyParts ?? [],
               neglected: coachStats?.neglected ?? [],
               bodyweight: coachStats?.bodyweight ?? null,
+              recentSplits: coachStats?.recentSplits ?? [],
+              suggestedSplit: coachStats?.suggestedSplit ?? "full",
+              lastSameSplit: coachStats?.lastSameSplit ?? [],
               context: context ?? {},
               recentCheckins,
               coachMemory,
@@ -418,10 +756,28 @@ async function generateCoachPlan(
 
     const outputText = extractOutputText(data);
     const parsed = JSON.parse(outputText) as unknown;
-    if (!isMorningCoachResponse(parsed) || parsed.decision !== decision) {
+    if (!isMorningCoachModelResponse(parsed) || parsed.decision !== decision) {
       throw new Error("OpenAI 응답 스키마가 올바르지 않습니다.");
     }
-    return parsed;
+    if (
+      (decision === "no_go" && parsed.todaySplit !== "rest") ||
+      (decision === "go" &&
+        parsed.todaySplit !== (coachStats?.suggestedSplit ?? "full"))
+    ) {
+      throw new Error("OpenAI 운동 분할이 입력 기록과 일치하지 않습니다.");
+    }
+    const todayPlan =
+      decision === "no_go"
+        ? []
+        : (coachStats?.lastSameSplit ?? [])
+            .slice(0, 8)
+            .map((exercise, index) => ({
+              name: exercise.name,
+              target: exercise.suggested,
+              note: parsed.todayPlan[index]?.note ?? "",
+              lastDate: exercise.lastDate,
+            }));
+    return { ...parsed, todayPlan };
   } finally {
     clearTimeout(timeout);
   }

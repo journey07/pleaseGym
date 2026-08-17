@@ -12,7 +12,21 @@ type CoachResult = {
   nextAction: "start" | "minimum" | "rest";
   safetyNote: string;
   progressNote: string;
+  todaySplit?: "upper" | "lower" | "full" | "rest";
+  todayPlan?: Array<{
+    name: string;
+    target: string;
+    note: string;
+    lastDate: string;
+  }>;
 };
+
+const splitLabel = {
+  upper: "상체",
+  lower: "하체",
+  full: "전신",
+  rest: "휴식",
+} as const;
 
 type StoredSet = {
   id: string;
@@ -986,6 +1000,31 @@ export default function MorningBridge() {
             </div>
             <h2>{coach.headline}</h2>
             <p>{coach.message}</p>
+
+            {coach.decision === "go" &&
+              coach.todayPlan &&
+              coach.todayPlan.length > 0 && (
+                <div className="coach-plan">
+                  <span>
+                    TODAY · {splitLabel[coach.todaySplit ?? "full"]}
+                  </span>
+                  {coach.todayPlan.map((item, index) => (
+                    <div
+                      className="coach-plan-row"
+                      key={`${item.name}-${index}`}
+                    >
+                      <div>
+                        <b>
+                          {item.name}
+                          <small>{item.lastDate}</small>
+                        </b>
+                        <strong>{item.target}</strong>
+                      </div>
+                      <p>{item.note}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
 
             {coach.progressNote && (
               <p className="coach-progress">

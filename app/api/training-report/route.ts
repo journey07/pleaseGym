@@ -8,7 +8,11 @@ import {
   type BodyPartStat,
   type StatSession,
 } from "@/app/lib/bodyPartStats";
-import type { BodyPart } from "@/app/lib/bodyPart";
+import { inferBodyPart, type BodyPart } from "@/app/lib/bodyPart";
+import {
+  canonicalNameMap,
+  normalizeExerciseName,
+} from "@/app/lib/exerciseName";
 
 // Same fixed coach model as the morning coach so every environment behaves identically.
 const OPENAI_MODEL = "gpt-5.6-luna";
@@ -61,6 +65,33 @@ type DistanceSeries = {
   points: Array<{ date: string; km: number }>;
 };
 
+type RegionKey = "upper" | "lower" | "core";
+
+type RegionStat = {
+  parts: BodyPart[];
+  weeklySets: number;
+  weeklyVolume: number;
+  monthlyVolume: number;
+  freq7: number;
+  freq28: number;
+};
+
+// 최근 28일 실제 수행 종목 인벤토리(top-8 시계열인 lifts와 별개). 종목 선택 평가 근거.
+type ExerciseInventoryItem = {
+  name: string;
+  part: BodyPart;
+  metric: string;
+  assisted: boolean;
+  sessions28: number;
+  sets28: number;
+};
+
+const REGION_PARTS: Record<RegionKey, BodyPart[]> = {
+  upper: ["가슴", "등", "어깨", "팔"],
+  lower: ["허벅지", "종아리"],
+  core: ["복근", "허리"],
+};
+
 type TrainingStats = {
   totalSessions: number;
   firstDate: string | null;
@@ -73,6 +104,8 @@ type TrainingStats = {
   cardio: DistanceSeries[];
   bodyParts: BodyPartStat[]; // 부위 단위 집계(신규 도배 해결·밸런스/방치 분석)
   neglected: BodyPart[];
+  regions: Record<RegionKey, RegionStat>; // 상체/하체/코어 합산(분리 진단 근거)
+  exercises: ExerciseInventoryItem[];
 };
 
 type TrainingReport = {
@@ -80,6 +113,14 @@ type TrainingReport = {
   overall: string;
   frequencyComment: string;
   balanceSummary: string; // 부위별 주간 볼륨 밸런스 1~2문장
+  upperBody: string; // 상체 진단 (가슴/등/어깨/팔)
+  lowerBody: string; // 하체 진단 (사두/후면/종아리)
+  efficiencyVerdict: string; // "지금 제대로 하고 있나" 한 줄 총평
+  exerciseSelection: Array<{
+    name: string;
+    verdict: "keep" | "swap" | "drop";
+    reason: string;
+  }>;
   neglectNote: string; // 약점·방치 부위 경고 + 왜 (없으면 "")
   bodyweightNote: string; // 체중·총볼륨 추세 (없으면 "")
   liftAnalysis: Array<{
@@ -108,11 +149,28 @@ const responseSchema = {
     overall: { type: "string" },
     frequencyComment: { type: "string" },
     balanceSummary: { type: "string" },
+    upperBody: { type: "string" },
+    lowerBody: { type: "string" },
+    efficiencyVerdict: { type: "string" },
+    exerciseSelection: {
+      type: "array",
+      maxItems: 6,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          name: { type: "string" },
+          verdict: { type: "string", enum: ["keep", "swap", "drop"] },
+          reason: { type: "string" },
+        },
+        required: ["name", "verdict", "reason"],
+      },
+    },
     neglectNote: { type: "string" },
     bodyweightNote: { type: "string" },
     liftAnalysis: {
       type: "array",
-      maxItems: 6,
+      maxItems: 4,
       items: {
         type: "object",
         additionalProperties: false,
@@ -132,6 +190,10 @@ const responseSchema = {
     "overall",
     "frequencyComment",
     "balanceSummary",
+    "upperBody",
+    "lowerBody",
+    "efficiencyVerdict",
+    "exerciseSelection",
     "neglectNote",
     "bodyweightNote",
     "liftAnalysis",
@@ -148,6 +210,8 @@ const systemPrompt = `당신은 EVERYONE BUT YOU의 불꽃 스파르타 스트�
 입력(stats): 서버가 계산한 실수치. 지어내기 금지, 있는 값만 인용.
 - stats.bodyParts: 근육 8부위별 { part, weeklyVolume(최근7일: 중량=Σ중량×반복, 맨몸=Σ반복), weeklySets, monthlyVolume, freq7/freq28(세션수), lastTrainedDate, daysSinceLast(null=28일 기록없음), trend(up/flat/down/new) }. weeklyVolume 내림차순 → 편중/방치가 한눈에.
 - stats.neglected: 방치 부위 목록(28일 공백이거나 10일+). ← 최우선으로 다뤄라.
+- stats.regions: 상체(가슴·등·어깨·팔), 하체(허벅지·종아리), 코어(복근·허리)별 { parts, weeklySets, weeklyVolume, monthlyVolume, freq7, freq28 }. 상체/하체 진단과 볼륨 비율의 근거다.
+- stats.exercises: 최근 28일 실제 수행한 전체 종목 인벤토리(최대 30) { name, part, metric, assisted, sessions28, sets28 }. 종목 선택 평가는 이 목록 전체를 근거로 한다.
 - stats.lifts[]: 종목별 시계열(kind=load는 e1rm, kind=reps 맨몸은 topReps). kind=load에는 어시스티드 맨몸 운동도 포함(부하=체중−보조kg, 보조↓=성장). 보조 detail로만.
 - stats.perWeekRecent/trackingDays: 빈도. bodyweight: { latest, deltaVs4wk(4주 전 대비 증감kg, null=비교불가), points } 또는 null.
 
@@ -155,15 +219,25 @@ const systemPrompt = `당신은 EVERYONE BUT YOU의 불꽃 스파르타 스트�
 - headline: 24자 이내 핵심 판정(부위 편중/방치를 반영. 예: "등은 폭발, 어깨·후면이 발목").
 - overall: 3문장 이내. 전반 상태 + 목표(크게/두께/너비) 대비 어디가 되고 어디가 구멍인지.
 - balanceSummary: 부위별 주간 볼륨 밸런스 1~2문장. bodyParts 근거로 "어디 편중, 어디 부족"을 수치와 함께. (예: "등·허벅지에 볼륨 몰림, 어깨·복근·허리는 바닥.")
+- upperBody: 상체 진단 2~3문장. 가슴·등·어깨·팔 각각 되는 곳과 구멍을 짚고, 두께(로우·수평당기기)와 너비(측면삼각근·수직당기기) 관점으로 판정.
+- lowerBody: 하체 진단 2~3문장. 대퇴사두, 후면(햄스트링·둔근·힙힌지), 종아리 커버 여부를 짚고 상체 대비 볼륨 비율을 언급.
+- efficiencyVerdict: "지금 제대로 하고 있나"에 답하는 한 줄 총평. 핵심 종목과 시간이 새는 종목을 구체적으로 지목.
+- exerciseSelection: 최대 6개. stats.exercises에 있는 실제 종목명만 name에 쓰고, verdict는 keep/swap/drop만 허용. keep은 시간 대비 효율 높은 핵심 종목과 그 이유, swap은 같은 시간에 더 많이 붙는 대체가 있을 때 reason에 "X 대신 Y"를 명시, drop은 중복·저효율이라 빼도 되는 이유를 한 줄로 작성.
 - neglectNote: neglected/저볼륨 부위 경고 + 왜(두께·너비 논리). 없으면 "". (예: "어깨 측면 방치—V너비는 측면 삼각근이 프레임을 벌려야 나온다. 데드 없어 기립근 두께도 빠짐.")
 - bodyweightNote: bodyweight 있으면 체중·총볼륨 추세 + 왜(벌크 목표라 체중이 재료). deltaVs4wk≤0이고 볼륨은 느는데 체중 정체면 "식사가 병목". 없으면 "체중도 기록하면 벌크 속도를 봐줄게" 한 줄 or "".
-- liftAnalysis: 종목별 trend/comment(최대 6, kind=load는 e1rm 흐름, reps는 topReps). 정체·하락엔 구체 처방(+2.5kg or 반복+1 or 세트+ or 부위 빈도↑). 보조.
+- liftAnalysis: 종목별 trend/comment(최대 4, kind=load는 e1rm 흐름, reps는 topReps). 정체·하락엔 구체 처방(+2.5kg or 반복+1 or 세트+ or 부위 빈도↑). 보조.
 - actionItems: 다음 7일 실행 구체 행동 최대 3개. 방치 부위 보완을 우선. "열심히" 같은 추상 금지.
 - warning: 안전 주의 한 문장, 없으면 "".
 
 규칙:
 - 빈도 판정: trackingDays<14면 낙제 판정 금지("첫 페이스 쌓는 중"), 14+면 주3+ 좋음/주2 최소선/주1↓ 부족.
 - 데이터 적으면(세션<4 또는 bodyParts 대부분 0) 판정 유보 + 데이터 쌓는 법. 1RM 실측·통증 진단 금지, 증량 5% 초과 금지.
+- 종목 선택의 기준은 시간 대비 근비대 효율이다. 다관절 복합운동을 1순위로 보되 고립운동을 일괄 저효율로 판정하지 마라.
+- 먼저 수평밀기·수직밀기·수평당기기·수직당기기·스쿼트·힙힌지·종아리 패턴 커버리지를 본다. 빈 패턴이 있으면 그 패턴이 고립운동보다 우선이므로 내전/외전 머신, 중복 컬 같은 저효율 종목과 맞바꾸는 swap으로만 제안한다.
+- 패턴이 모두 채워졌다면 약한 부위 고립운동은 keep할 수 있다. 예를 들어 스쿼트 뒤 레그 익스텐션 마무리는 유효하다. 고립운동이 최다 빈도인데 큰 패턴이 비었다면 단순히 빼라고 하지 말고 순서·세트를 줄여 빈 패턴에 자리를 내주라고 해라.
+- 같은 패턴의 중복은 drop이다. 컬 3종, 풀다운과 암풀다운 같은 중복을 점검한다. 이상적인 전체 종목 수는 8~10종이다.
+- add verdict는 없다. 리포트 어느 필드에서도 종목 "추가"를 처방하지 말고, 빠진 패턴은 반드시 기존 저효율 종목을 밀어내는 swap으로만 제안한다. 총 종목 수를 늘리지 마라.
+- stats.exercises 전체를 근거로 판단하고, 목록에 없는 종목을 사용자가 하고 있다고 말하지 마라. exerciseSelection.name은 반드시 목록의 name과 정확히 같아야 한다.
 - 어조: 스파르타("가자","쥐어짜","챔피언"), 비아냥·모욕 금지. 관찰된 사실 최소 한 조각 정확 인용.`;
 
 const dateKeyInSeoul = () =>
@@ -211,6 +285,15 @@ function buildStats(
       exercises: session.exercises ?? [],
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
+  const canonicalNames = canonicalNameMap(
+    sessions.flatMap((session) =>
+      session.exercises.map((exercise) =>
+        String(exercise.name ?? "")
+          .trim()
+          .slice(0, 60),
+      ),
+    ),
+  );
 
   // Cutoffs are compared with >= and today counts, so -6/-27 give exact 7/28-day windows.
   const last7Cutoff = shiftSeoulDateKey(-6);
@@ -226,6 +309,7 @@ function buildStats(
         .trim()
         .slice(0, 60);
       if (!name) continue;
+      const normalizedName = normalizeExerciseName(name);
       const doneSets = (exercise.sets ?? []).filter(
         (set) => set?.done !== false,
       );
@@ -237,9 +321,10 @@ function buildStats(
           0,
         );
         if (km <= 0) continue;
-        const byDate = cardioMap.get(name) ?? new Map<string, number>();
+        const byDate =
+          cardioMap.get(normalizedName) ?? new Map<string, number>();
         byDate.set(session.date, round1((byDate.get(session.date) ?? 0) + km));
-        cardioMap.set(name, byDate);
+        cardioMap.set(normalizedName, byDate);
         continue;
       }
 
@@ -271,7 +356,8 @@ function buildStats(
             e1rm: round1(topWeight * (1 + repsAtTop / 30)),
             volume: Math.round(volume),
           };
-          const byDate = liftMap.get(name) ?? new Map<string, LiftPoint>();
+          const byDate =
+            liftMap.get(normalizedName) ?? new Map<string, LiftPoint>();
           const existing = byDate.get(session.date);
           if (!existing) {
             byDate.set(session.date, point);
@@ -282,7 +368,7 @@ function buildStats(
               volume: existing.volume + point.volume,
             });
           }
-          liftMap.set(name, byDate);
+          liftMap.set(normalizedName, byDate);
           continue;
         }
 
@@ -312,7 +398,8 @@ function buildStats(
           volume: repVolume,
           topReps,
         };
-        const byDate = bwMap.get(name) ?? new Map<string, LiftPoint>();
+        const byDate =
+          bwMap.get(normalizedName) ?? new Map<string, LiftPoint>();
         const existing = byDate.get(session.date);
         if (!existing) {
           byDate.set(session.date, point);
@@ -324,7 +411,7 @@ function buildStats(
             volume: existing.volume + point.volume,
           });
         }
-        bwMap.set(name, byDate);
+        bwMap.set(normalizedName, byDate);
         continue;
       }
 
@@ -349,7 +436,8 @@ function buildStats(
         e1rm: round1(topWeight * (1 + repsAtTop / 30)),
         volume: Math.round(volume),
       };
-      const byDate = liftMap.get(name) ?? new Map<string, LiftPoint>();
+      const byDate =
+        liftMap.get(normalizedName) ?? new Map<string, LiftPoint>();
       const existing = byDate.get(session.date);
       if (!existing) {
         byDate.set(session.date, point);
@@ -361,7 +449,7 @@ function buildStats(
           volume: existing.volume + point.volume,
         });
       }
-      liftMap.set(name, byDate);
+      liftMap.set(normalizedName, byDate);
     }
   }
 
@@ -369,8 +457,8 @@ function buildStats(
     map: Map<string, Map<string, LiftPoint>>,
     kind: "load" | "reps",
   ): LiftSeries[] =>
-    [...map.entries()].map(([name, byDate]) => ({
-      name,
+    [...map.entries()].map(([normalizedName, byDate]) => ({
+      name: canonicalNames.get(normalizedName) ?? normalizedName,
       sessions: byDate.size,
       kind,
       points: [...byDate.values()]
@@ -386,8 +474,8 @@ function buildStats(
     .slice(0, 8);
 
   const cardio: DistanceSeries[] = [...cardioMap.entries()]
-    .map(([name, byDate]) => ({
-      name,
+    .map(([normalizedName, byDate]) => ({
+      name: canonicalNames.get(normalizedName) ?? normalizedName,
       sessions: byDate.size,
       points: [...byDate.entries()]
         .map(([date, km]) => ({ date, km }))
@@ -416,6 +504,73 @@ function buildStats(
     dateKeyInSeoul(),
   );
 
+  // 상체/하체/코어 합산 + 최근 28일 종목 인벤토리(모델의 종목 선택 평가 근거).
+  const regionKeys = Object.keys(REGION_PARTS) as RegionKey[];
+  const regionOf = (part: BodyPart): RegionKey | null =>
+    regionKeys.find((key) => REGION_PARTS[key].includes(part)) ?? null;
+  const regionDays: Record<RegionKey, { d7: Set<string>; d28: Set<string> }> =
+    { upper: { d7: new Set(), d28: new Set() },
+      lower: { d7: new Set(), d28: new Set() },
+      core: { d7: new Set(), d28: new Set() } };
+  const inventory = new Map<
+    string,
+    Omit<ExerciseInventoryItem, "sessions28"> & { dates: Set<string> }
+  >();
+  for (const session of sessions) {
+    if (session.date < last28Cutoff) continue;
+    for (const exercise of session.exercises) {
+      const name = String(exercise.name ?? "")
+        .trim()
+        .slice(0, 60);
+      if (!name) continue;
+      const normalizedName = normalizeExerciseName(name);
+      const doneSets = (exercise.sets ?? []).filter(
+        (set) => set?.done !== false,
+      );
+      if (doneSets.length === 0) continue;
+      const part = exercise.bodyPart ?? inferBodyPart(name);
+      const item = inventory.get(normalizedName) ?? {
+        name: canonicalNames.get(normalizedName) ?? name,
+        part,
+        metric: String(exercise.metric ?? "weight"),
+        assisted: exercise.assisted === true,
+        sets28: 0,
+        dates: new Set<string>(),
+      };
+      item.dates.add(session.date);
+      item.sets28 += doneSets.length;
+      inventory.set(normalizedName, item);
+      if (exercise.metric === "distance") continue;
+      if (!doneSets.some((set) => (Number(set.reps) || 0) > 0)) continue;
+      const region = regionOf(part);
+      if (!region) continue;
+      regionDays[region].d28.add(session.date);
+      if (session.date >= last7Cutoff) regionDays[region].d7.add(session.date);
+    }
+  }
+  const regions = Object.fromEntries(
+    regionKeys.map((key) => {
+      const stats = bodyParts.filter((stat) =>
+        REGION_PARTS[key].includes(stat.part),
+      );
+      const sum = (pick: (stat: BodyPartStat) => number) =>
+        stats.reduce((total, stat) => total + pick(stat), 0);
+      const region: RegionStat = {
+        parts: REGION_PARTS[key],
+        weeklySets: sum((stat) => stat.weeklySets),
+        weeklyVolume: sum((stat) => stat.weeklyVolume),
+        monthlyVolume: sum((stat) => stat.monthlyVolume),
+        freq7: regionDays[key].d7.size,
+        freq28: regionDays[key].d28.size,
+      };
+      return [key, region];
+    }),
+  ) as Record<RegionKey, RegionStat>;
+  const exercises: ExerciseInventoryItem[] = [...inventory.values()]
+    .map(({ dates, ...item }) => ({ ...item, sessions28: dates.size }))
+    .sort((a, b) => b.sessions28 - a.sessions28)
+    .slice(0, 30);
+
   return {
     totalSessions: sessions.length,
     firstDate,
@@ -429,6 +584,8 @@ function buildStats(
     cardio,
     bodyParts,
     neglected: neglectedParts(bodyParts),
+    regions,
+    exercises,
   };
 }
 
@@ -517,6 +674,19 @@ const isTrainingReport = (value: unknown): value is TrainingReport => {
     typeof candidate.overall === "string" &&
     typeof candidate.frequencyComment === "string" &&
     typeof candidate.balanceSummary === "string" &&
+    typeof candidate.upperBody === "string" &&
+    typeof candidate.lowerBody === "string" &&
+    typeof candidate.efficiencyVerdict === "string" &&
+    Array.isArray(candidate.exerciseSelection) &&
+    candidate.exerciseSelection.every(
+      (item) =>
+        item &&
+        typeof item.name === "string" &&
+        (item.verdict === "keep" ||
+          item.verdict === "swap" ||
+          item.verdict === "drop") &&
+        typeof item.reason === "string",
+    ) &&
     typeof candidate.neglectNote === "string" &&
     typeof candidate.bodyweightNote === "string" &&
     Array.isArray(candidate.liftAnalysis) &&
@@ -558,7 +728,7 @@ async function generateReport(
         reasoning: { effort: "medium" },
         // medium reasoning tokens count toward this budget; raise it so the JSON output
         // isn't truncated by reasoning consumption (was 1200 under low effort).
-        max_output_tokens: 2400,
+        max_output_tokens: 3200,
         input: [
           { role: "developer", content: systemPrompt },
           {
