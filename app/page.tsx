@@ -882,7 +882,7 @@ const trendModes = (metric: Metric, assisted: boolean): TrendMode[] => {
       lowerIsBetter: false,
       showTopWeight: true,
       // 최고 세트 하나만 보는 추정 1RM과 달리 그날 전 세트를 함께 본다.
-      note: "세션 부하 = 볼륨 가중 평균 중량 × (1 + 총 반복 ÷ 30). 그날 전 세트의 중량과 볼륨을 함께 반영해서, 세트를 늘려도 무게를 올려도 값이 올라갑니다. 실제 1RM과는 다른 척도예요.",
+      note: "세션 부하 = 볼륨 가중 평균 중량 × (1 + 총 반복 ÷ 30). 그날 전 세트의 중량과 볼륨을 함께 반영해서, 세트를 늘려도 무게를 올려도 값이 올라갑니다.",
       value: (point) => point.sessionLoad,
     },
     {
