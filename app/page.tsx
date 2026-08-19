@@ -32,6 +32,7 @@ import {
   canonicalNameMap,
   normalizeExerciseName,
 } from "./lib/exerciseName";
+import { bestOneRepMax, sessionLoadOf } from "./lib/trainingLoad";
 
 type SortableRenderProps = {
   setNodeRef: (node: HTMLElement | null) => void;
@@ -291,7 +292,9 @@ function ExerciseDetail({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const mode = trendMode(metric, assisted);
+  const modes = trendModes(metric, assisted);
+  const [modeKey, setModeKey] = useState(modes[0].key);
+  const mode = modes.find((item) => item.key === modeKey) ?? modes[0];
   const values = points.map(mode.value);
   const best = values.length
     ? mode.lowerIsBetter
@@ -344,8 +347,8 @@ function ExerciseDetail({
                 </strong>
                 <span>
                   {bestPoint ? shortDateLabel(bestPoint.date) : "-"}
-                  {/* 추정 1RM은 환산값이라, 실제로 든 최고 중량을 같이 적어준다. */}
-                  {mode.label === "추정 1RM" && topWeight > 0
+                  {/* 환산 지표는 실제로 든 최고 중량을 같이 적어준다. */}
+                  {mode.showTopWeight && topWeight > 0
                     ? ` · 실제 ${formatNumber(topWeight)}kg`
                     : ""}
                 </span>
@@ -381,6 +384,22 @@ function ExerciseDetail({
                 </span>
               </div>
             </div>
+
+            {modes.length > 1 && (
+              <div className="trend-modes" role="tablist" aria-label="지표 선택">
+                {modes.map((item) => (
+                  <button
+                    key={item.key}
+                    role="tab"
+                    aria-selected={item.key === mode.key}
+                    className={item.key === mode.key ? "active" : ""}
+                    onClick={() => setModeKey(item.key)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            )}
 
             <TrendChart points={points} mode={mode} />
             <p className="trend-note">{mode.note}</p>
@@ -739,15 +758,12 @@ const shortDateLabel = (key: string) => {
   return `${Number(month)}/${Number(day)}`;
 };
 
-// Epley 추정 1RM. 1회는 든 무게 그대로.
-const estimateOneRepMax = (weight: number, reps: number) =>
-  weight > 0 && reps > 0 ? weight * (1 + reps / 30) : 0;
-
 type TrendPoint = {
   date: string;
   sets: number;
   topWeight: number;
   best1RM: number;
+  sessionLoad: number;
   topReps: number;
   totalReps: number;
   volume: number;
@@ -778,11 +794,8 @@ const buildExerciseTrend = (
         date: sessionDateKey(session.date),
         sets: sets.length,
         topWeight: sets.reduce((value, set) => Math.max(value, set.weight), 0),
-        best1RM: sets.reduce(
-          (value, set) =>
-            Math.max(value, estimateOneRepMax(set.weight, set.reps)),
-          0,
-        ),
+        best1RM: bestOneRepMax(sets),
+        sessionLoad: sessionLoadOf(sets),
         topReps: sets.reduce((value, set) => Math.max(value, set.reps), 0),
         totalReps: sets.reduce((sum, set) => sum + set.reps, 0),
         volume: sets.reduce((sum, set) => sum + set.weight * set.reps, 0),
@@ -806,49 +819,84 @@ const buildExerciseTrend = (
   return points.sort((a, b) => a.date.localeCompare(b.date));
 };
 
-// 종목 성격에 맞는 대표 지표 하나를 고른다. 보조 종목은 "적을수록 좋음".
+// 종목 성격에 맞는 지표들. 첫 번째가 기본값이고, 2개 이상이면 상세 화면에서 전환할 수 있다.
+// 보조 종목은 "적을수록 좋음".
 type TrendMode = {
+  key: string;
   label: string;
   unit: string;
   lowerIsBetter: boolean;
+  // 환산값이라 실제로 든 최고 중량을 같이 적어줘야 하는 지표인지.
+  showTopWeight?: boolean;
   note: string;
   value: (point: TrendPoint) => number;
 };
 
-const trendMode = (metric: Metric, assisted: boolean): TrendMode => {
+const trendModes = (metric: Metric, assisted: boolean): TrendMode[] => {
   if (metric === "distance")
-    return {
-      label: "거리",
-      unit: "km",
-      lowerIsBetter: false,
-      note: "그날 기록한 거리 합계.",
-      value: (point) => point.distanceKm,
-    };
+    return [
+      {
+        key: "distance",
+        label: "거리",
+        unit: "km",
+        lowerIsBetter: false,
+        note: "그날 기록한 거리 합계.",
+        value: (point) => point.distanceKm,
+      },
+    ];
   if (assisted)
-    return {
-      label: "보조 중량",
-      unit: "kg",
-      lowerIsBetter: true,
-      note: "그날 세트 중 가장 가벼운 보조 중량. 몸에서 빼주는 무게라 낮을수록 좋아요.",
-      value: (point) => point.minAssist ?? point.topWeight,
-    };
+    return [
+      {
+        key: "assist",
+        label: "보조 중량",
+        unit: "kg",
+        lowerIsBetter: true,
+        note: "그날 세트 중 가장 가벼운 보조 중량. 몸에서 빼주는 무게라 낮을수록 좋아요.",
+        value: (point) => point.minAssist ?? point.topWeight,
+      },
+    ];
   if (metric === "bodyweight")
-    return {
-      label: "최고 반복",
-      unit: "회",
+    return [
+      {
+        key: "topReps",
+        label: "최고 반복",
+        unit: "회",
+        lowerIsBetter: false,
+        note: "그날 한 세트에서 나온 최고 반복 수.",
+        value: (point) => point.topReps,
+      },
+      {
+        key: "totalReps",
+        label: "총 반복",
+        unit: "회",
+        lowerIsBetter: false,
+        note: "그날 전 세트 반복을 더한 값. 맨몸 종목은 중량이 고정이라 이게 곧 볼륨입니다.",
+        value: (point) => point.totalReps,
+      },
+    ];
+  return [
+    {
+      key: "sessionLoad",
+      label: "세션 부하",
+      unit: "kg",
       lowerIsBetter: false,
-      note: "그날 한 세트에서 나온 최고 반복 수.",
-      value: (point) => point.topReps,
-    };
-  return {
-    label: "추정 1RM",
-    unit: "kg",
-    lowerIsBetter: false,
-    // 실제로 든 최고 중량이 아니라, 무게×반복을 1회 최대치로 환산한 값(Epley).
-    // 60×10과 70×5의 강도를 같은 자로 비교하려고 쓴다.
-    note: "추정 1RM = 중량 × (1 + 반복 ÷ 30). 그날 세트 중 가장 높은 값이고, 실제로 든 최고 중량과는 다릅니다.",
-    value: (point) => point.best1RM,
-  };
+      showTopWeight: true,
+      // 최고 세트 하나만 보는 추정 1RM과 달리 그날 전 세트를 함께 본다.
+      note: "세션 부하 = 볼륨 가중 평균 중량 × (1 + 총 반복 ÷ 30). 그날 전 세트의 중량과 볼륨을 함께 반영해서, 세트를 늘려도 무게를 올려도 값이 올라갑니다. 실제 1RM과는 다른 척도예요.",
+      value: (point) => point.sessionLoad,
+    },
+    {
+      key: "e1rm",
+      label: "추정 1RM",
+      unit: "kg",
+      lowerIsBetter: false,
+      showTopWeight: true,
+      // 실제로 든 최고 중량이 아니라, 무게×반복을 1회 최대치로 환산한 값(Epley).
+      // 60×10과 70×5의 강도를 같은 자로 비교하려고 쓴다.
+      note: "추정 1RM = 중량 × (1 + 반복 ÷ 30). 그날 세트 중 가장 높은 값 하나만 보기 때문에 볼륨은 반영되지 않고, 실제로 든 최고 중량과도 다릅니다.",
+      value: (point) => point.best1RM,
+    },
+  ];
 };
 
 const prepareSetForSave = (set: WorkoutSet): WorkoutSet => {
@@ -1659,7 +1707,7 @@ export default function Home() {
 
         {!report && reportStatus !== "error" && (
           <p className="report-empty">
-            기록 전체를 읽고 훈련 빈도·강도·종목별 추정 1RM 추이를 분석해 지금
+            기록 전체를 읽고 훈련 빈도·강도·종목별 세션 부하 추이를 분석해 지금
             잘 가고 있는지 판정합니다.
           </p>
         )}
@@ -2276,6 +2324,8 @@ export default function Home() {
 
       {detailTarget && (
         <ExerciseDetail
+          // 종목이 바뀌면 지표 선택 상태를 그 종목의 기본값으로 되돌린다.
+          key={`${detailTarget.name}-${detailTarget.metric}`}
           name={detailTarget.name}
           metric={detailTarget.metric}
           assisted={detailTarget.assisted}

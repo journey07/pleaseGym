@@ -359,6 +359,10 @@ button { color: inherit; }
 .detail-stats strong.up { color: #1f7a4d; }
 .detail-stats strong.down { color: var(--accent); }
 .detail-stats span { display: block; margin-top: 6px; color: #96968f; font-size: 9px; }
+.trend-modes { display: flex; gap: 1px; margin-top: 16px; background: var(--line); border: 1px solid var(--line); }
+.trend-modes button { flex: 1; padding: 8px 6px; color: var(--muted); background: var(--surface, #fff); border: 0; font: 650 9px/1 var(--font-geist-mono), monospace; letter-spacing: .06em; cursor: pointer; }
+.trend-modes button:hover { color: var(--ink); }
+.trend-modes button.active { color: var(--paper, #fff); background: var(--ink); }
 .trend-chart { display: block; width: 100%; height: auto; margin-top: 16px; background: var(--paper); }
 .trend-line { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .trend-dot { fill: var(--surface, #fff); stroke: var(--ink); stroke-width: 1.4; }
