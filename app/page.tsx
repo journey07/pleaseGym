@@ -171,7 +171,11 @@ function TrendChart({
   mode: TrendMode;
 }) {
   const [active, setActive] = useState<number | null>(null);
-  const values = points.map(mode.value);
+  // 보조 중량처럼 "낮을수록 좋음"인 지표는 위아래를 뒤집어 그린다. 숫자는 그대로
+  // 보여주되(보조 30 → 25kg), 좋아질수록 선이 위로 올라가야 하락으로 오해하지 않는다.
+  const plotted = (point: TrendPoint) =>
+    mode.lowerIsBetter ? -mode.value(point) : mode.value(point);
+  const values = points.map(plotted);
   const max = Math.max(...values);
   const min = Math.min(...values);
   const flat = max === min;
@@ -186,12 +190,12 @@ function TrendChart({
       ? width / 2
       : inset + (index / (points.length - 1)) * (width - inset * 2);
   // 값이 전부 같으면(기록 1회 포함) 가운데 높이에 눕힌다.
-  const y = (value: number) =>
+  const y = (point: TrendPoint) =>
     flat
       ? inset + plot / 2
-      : height - axis - inset - ((value - min) / span) * plot;
+      : height - axis - inset - ((plotted(point) - min) / span) * plot;
   const line = points
-    .map((point, index) => `${x(index)},${y(mode.value(point))}`)
+    .map((point, index) => `${x(index)},${y(point)}`)
     .join(" ");
 
   // 날짜는 최대 5개만. 마지막 기록에서 거꾸로 세어 항상 최신 날짜를 남긴다.
@@ -205,7 +209,9 @@ function TrendChart({
       className="trend-chart"
       viewBox={`0 0 ${width} ${height}`}
       role="img"
-      aria-label={`${mode.label} 추이 그래프`}
+      aria-label={`${mode.label} 추이 그래프${
+        mode.lowerIsBetter ? " (낮을수록 좋아서 위아래를 뒤집어 그림)" : ""
+      }`}
     >
       <polyline className="trend-line" points={line} />
       {points.map((point, index) => (
@@ -215,7 +221,7 @@ function TrendChart({
             index === points.length - 1 ? "trend-dot last" : "trend-dot"
           }
           cx={x(index)}
-          cy={y(mode.value(point))}
+          cy={y(point)}
           r={index === active ? 5 : index === points.length - 1 ? 4 : 2.5}
         />
       ))}
@@ -225,7 +231,7 @@ function TrendChart({
           key={`hit-${point.date}`}
           className="trend-hit"
           cx={x(index)}
-          cy={y(mode.value(point))}
+          cy={y(point)}
           r={13}
           tabIndex={0}
           role="button"
@@ -243,7 +249,7 @@ function TrendChart({
       {active !== null && (
         <TrendBubble
           x={x(active)}
-          y={y(mode.value(points[active]))}
+          y={y(points[active])}
           width={width}
           text={`${shortDateLabel(points[active].date)}  ${formatNumber(
             mode.value(points[active]),
@@ -325,6 +331,8 @@ function ExerciseDetail({
   const first = points[0];
   const last = points.at(-1);
   const delta = first && last ? mode.value(last) - mode.value(first) : 0;
+  // 보조 중량은 줄어든 게 성장이다. 부호만 보고 색을 칠하면 좋아진 걸 빨갛게 칠하게 된다.
+  const improved = mode.lowerIsBetter ? delta < 0 : delta > 0;
   const totalSets = points.reduce((sum, point) => sum + point.sets, 0);
   const topWeight = points.reduce(
     (value, point) => Math.max(value, point.topWeight),
@@ -383,7 +391,7 @@ function ExerciseDetail({
               </div>
               <div>
                 <small>첫 기록 대비</small>
-                <strong className={delta === 0 ? "" : delta > 0 ? "up" : "down"}>
+                <strong className={delta === 0 ? "" : improved ? "up" : "down"}>
                   {delta > 0 ? "+" : ""}
                   {formatNumber(delta)}
                   <em>{mode.unit}</em>
@@ -886,7 +894,7 @@ const assistMode: TrendMode = {
   label: "보조 중량",
   unit: "kg",
   lowerIsBetter: true,
-  note: "그날 세트 중 가장 가벼운 보조 중량. 몸에서 빼주는 무게라 낮을수록 좋아요.",
+  note: "그날 세트 중 가장 가벼운 보조 중량. 몸에서 빼주는 무게라 낮을수록 좋아요. 그래서 그래프는 보조가 줄수록 선이 위로 가도록 뒤집어 그립니다.",
   // 보조를 아예 안 쓴 날은 minAssist가 null이다. topWeight는 유효 부하라 폴백으로 못 쓴다.
   value: (point) => point.minAssist ?? 0,
 };
@@ -966,7 +974,7 @@ const trendModes = (
           modes: [
             {
               ...assistMode,
-              note: "그날 세트 중 가장 가벼운 보조 중량. 몸에서 빼주는 무게라 낮을수록 좋아요. 체중을 기록하면 체중 − 보조로 실제 부하까지 계산해 드려요.",
+              note: "그날 세트 중 가장 가벼운 보조 중량. 몸에서 빼주는 무게라 낮을수록 좋아요. 그래서 그래프는 보조가 줄수록 선이 위로 가도록 뒤집어 그립니다. 체중을 기록하면 체중 − 보조로 실제 부하까지 계산해 드려요.",
             },
           ],
           defaultKey: "assist",
