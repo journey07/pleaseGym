@@ -104,3 +104,8 @@ export const bodyweightForDate = (
 // 유효 부하 = 체중 − 보조. 보조가 체중을 넘겨도 0 이하로는 안 떨어뜨린다.
 export const assistedLoad = (bodyweight: number, assistKg: number): number =>
   Math.max(bodyweight - Math.max(assistKg, 0), 1);
+
+// 맨몸 종목의 유효 부하 = 체중 + 추가중량. 딥스벨트를 차면 그만큼 더 드는 셈이다.
+// 추가중량이 0이면 체중 그대로라, 순수 맨몸도 같은 식으로 다룰 수 있다.
+export const weightedBodyLoad = (bodyweight: number, addedKg: number): number =>
+  bodyweight + Math.max(addedKg, 0);

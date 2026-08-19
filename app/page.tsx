@@ -38,6 +38,7 @@ import {
   bodyweightForDate,
   detectAssisted,
   sessionLoadOf,
+  weightedBodyLoad,
   type BodyweightEntry,
 } from "./lib/trainingLoad";
 
@@ -301,9 +302,19 @@ function ExerciseDetail({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const modes = trendModes(metric, assisted, hasBodyweight);
-  const [modeKey, setModeKey] = useState(modes[0].key);
-  const mode = modes.find((item) => item.key === modeKey) ?? modes[0];
+  // 추가중량을 실제로 단 기록이 있는 종목인지. 기본 탭을 고르는 데 쓴다.
+  const hasAddedLoad = points.some((point) => point.addedWeight > 0);
+  const { modes, defaultKey } = trendModes(
+    metric,
+    assisted,
+    hasBodyweight,
+    hasAddedLoad,
+  );
+  const [modeKey, setModeKey] = useState(defaultKey);
+  const mode =
+    modes.find((item) => item.key === modeKey) ??
+    modes.find((item) => item.key === defaultKey) ??
+    modes[0];
   const values = points.map(mode.value);
   const best = values.length
     ? mode.lowerIsBetter
@@ -776,13 +787,17 @@ type TrendPoint = {
   volume: number;
   distanceKm: number;
   minAssist: number | null;
+  addedWeight: number; // 맨몸 종목에 달았던 추가중량(그날 최대). 안 달았으면 0.
+
   summary: string;
 };
 
 // 한 종목의 세션별 기록을 날짜 오름차순으로 정리한다.
-// 어시스티드 종목은 기록된 weight가 "몸에서 빼주는 보조 중량"이라 그대로 쓰면 방향이 뒤집힌다.
-// 그날 체중이 있으면 유효 부하(체중 − 보조)로 환산해서 일반 중량 종목과 같은 자로 재고,
-// 체중 기록이 없으면 환산을 포기하고 보조 중량만 남긴다.
+// 맨몸 계열은 기록된 weight가 중량 그 자체가 아니라서 그대로 쓰면 안 된다.
+//   어시스티드: weight = 몸에서 빼주는 보조   → 유효 부하 = 체중 − 보조 (방향이 뒤집힘)
+//   가중 맨몸:  weight = 벨트에 단 추가중량   → 유효 부하 = 체중 + 추가중량
+// 어느 쪽이든 그날 체중을 알아야 환산이 되고, 체중 기록이 없으면 환산을 포기하고
+// 반복/보조 중량 같은 원래 지표만 남긴다.
 const buildExerciseTrend = (
   history: Session[],
   name: string,
@@ -802,15 +817,20 @@ const buildExerciseTrend = (
       if (sets.length === 0) return;
       const assist = minAssistWeight(exercise);
       const dateKey = sessionDateKey(session.date);
-      const bodyweight = isAssistedExercise(exercise)
-        ? bodyweightForDate(bodyweightLog, dateKey)
-        : null;
+      const assisted = isAssistedExercise(exercise);
+      const weightedBody = !assisted && metric === "bodyweight";
+      const bodyweight =
+        assisted || weightedBody
+          ? bodyweightForDate(bodyweightLog, dateKey)
+          : null;
       // 부하 지표(세션 부하·추정 1RM·최고 중량)는 이 환산된 세트로 계산한다.
       const loadSets =
         bodyweight === null
           ? sets
           : sets.map((set) => ({
-              weight: assistedLoad(bodyweight, set.weight),
+              weight: assisted
+                ? assistedLoad(bodyweight, set.weight)
+                : weightedBodyLoad(bodyweight, set.weight),
               reps: set.reps,
             }));
       points.push({
@@ -826,7 +846,10 @@ const buildExerciseTrend = (
         totalReps: sets.reduce((sum, set) => sum + set.reps, 0),
         volume: loadSets.reduce((sum, set) => sum + set.weight * set.reps, 0),
         distanceKm: sets.reduce((sum, set) => sum + (set.distanceKm ?? 0), 0),
-        minAssist: isAssistedExercise(exercise) ? assist : null,
+        minAssist: assisted ? assist : null,
+        addedWeight: weightedBody
+          ? sets.reduce((value, set) => Math.max(value, set.weight), 0)
+          : 0,
         summary:
           metric === "distance"
             ? `${formatNumber(
@@ -868,73 +891,127 @@ const assistMode: TrendMode = {
   value: (point) => point.minAssist ?? 0,
 };
 
-// hasBodyweight: 그 종목 기록 시점의 체중을 알 수 있는지. 어시스티드는 체중이 있어야
-// 유효 부하(체중 − 보조)로 환산할 수 있고, 없으면 보조 중량 하나만 보여준다.
+const topRepsMode: TrendMode = {
+  key: "topReps",
+  label: "최고 반복",
+  unit: "회",
+  lowerIsBetter: false,
+  note: "그날 한 세트에서 나온 최고 반복 수.",
+  value: (point) => point.topReps,
+};
+
+const totalRepsMode: TrendMode = {
+  key: "totalReps",
+  label: "총 반복",
+  unit: "회",
+  lowerIsBetter: false,
+  note: "그날 전 세트 반복을 더한 값. 추가중량 없이 하면 이게 곧 볼륨입니다.",
+  value: (point) => point.totalReps,
+};
+
+// 첫 번째가 아니라 defaultKey가 기본 탭이다. 맨몸은 추가중량을 실제로 쓰는 종목만
+// 부하를 기본으로 띄우고, 순수 맨몸은 익숙한 반복 수를 그대로 기본으로 둔다.
+type TrendModeSet = { modes: TrendMode[]; defaultKey: string };
+
+// hasBodyweight: 그 종목 기록 시점의 체중을 알 수 있는지. 맨몸 계열은 체중이 있어야
+// 유효 부하로 환산할 수 있고, 없으면 원래 지표(보조 중량·반복)만 보여준다.
+// hasAddedLoad: 맨몸 종목에 추가중량을 단 기록이 있는지.
 const trendModes = (
   metric: Metric,
   assisted: boolean,
   hasBodyweight: boolean,
-): TrendMode[] => {
+  hasAddedLoad: boolean,
+): TrendModeSet => {
   if (metric === "distance")
-    return [
-      {
-        key: "distance",
-        label: "거리",
-        unit: "km",
-        lowerIsBetter: false,
-        note: "그날 기록한 거리 합계.",
-        value: (point) => point.distanceKm,
-      },
-    ];
+    return {
+      modes: [
+        {
+          key: "distance",
+          label: "거리",
+          unit: "km",
+          lowerIsBetter: false,
+          note: "그날 기록한 거리 합계.",
+          value: (point) => point.distanceKm,
+        },
+      ],
+      defaultKey: "distance",
+    };
   if (assisted)
     return hasBodyweight
-      ? [
+      ? {
+          modes: [
+            {
+              key: "sessionLoad",
+              label: "세션 부하",
+              unit: "kg",
+              lowerIsBetter: false,
+              showTopWeight: true,
+              note: "보조 종목은 체중에서 보조 중량을 뺀 만큼이 실제로 드는 무게예요. 그 유효 부하로 그날 전 세트의 중량과 볼륨을 함께 계산한 값이라, 보조를 줄일수록·세트를 늘릴수록 올라갑니다.",
+              value: (point) => point.sessionLoad,
+            },
+            {
+              key: "e1rm",
+              label: "추정 1RM",
+              unit: "kg",
+              lowerIsBetter: false,
+              showTopWeight: true,
+              note: "유효 부하(체중 − 보조)로 환산한 추정 1RM = 부하 × (1 + 반복 ÷ 30). 그날 세트 중 가장 높은 값 하나만 보기 때문에 볼륨은 반영되지 않습니다.",
+              value: (point) => point.best1RM,
+            },
+            assistMode,
+          ],
+          defaultKey: "sessionLoad",
+        }
+      : {
+          modes: [
+            {
+              ...assistMode,
+              note: "그날 세트 중 가장 가벼운 보조 중량. 몸에서 빼주는 무게라 낮을수록 좋아요. 체중을 기록하면 체중 − 보조로 실제 부하까지 계산해 드려요.",
+            },
+          ],
+          defaultKey: "assist",
+        };
+  if (metric === "bodyweight") {
+    if (!hasBodyweight)
+      return {
+        modes: [
+          topRepsMode,
           {
-            key: "sessionLoad",
-            label: "세션 부하",
-            unit: "kg",
-            lowerIsBetter: false,
-            showTopWeight: true,
-            note: "보조 종목은 체중에서 보조 중량을 뺀 만큼이 실제로 드는 무게예요. 그 유효 부하로 그날 전 세트의 중량과 볼륨을 함께 계산한 값이라, 보조를 줄일수록·세트를 늘릴수록 올라갑니다.",
-            value: (point) => point.sessionLoad,
+            ...totalRepsMode,
+            note: "그날 전 세트 반복을 더한 값. 체중을 기록하면 추가중량까지 더한 실제 부하도 계산해 드려요.",
           },
-          {
-            key: "e1rm",
-            label: "추정 1RM",
-            unit: "kg",
-            lowerIsBetter: false,
-            showTopWeight: true,
-            note: "유효 부하(체중 − 보조)로 환산한 추정 1RM = 부하 × (1 + 반복 ÷ 30). 그날 세트 중 가장 높은 값 하나만 보기 때문에 볼륨은 반영되지 않습니다.",
-            value: (point) => point.best1RM,
-          },
-          assistMode,
-        ]
-      : [
-          {
-            ...assistMode,
-            note: "그날 세트 중 가장 가벼운 보조 중량. 몸에서 빼주는 무게라 낮을수록 좋아요. 체중을 기록하면 체중 − 보조로 실제 부하까지 계산해 드려요.",
-          },
-        ];
-  if (metric === "bodyweight")
-    return [
-      {
-        key: "topReps",
-        label: "최고 반복",
-        unit: "회",
-        lowerIsBetter: false,
-        note: "그날 한 세트에서 나온 최고 반복 수.",
-        value: (point) => point.topReps,
-      },
-      {
-        key: "totalReps",
-        label: "총 반복",
-        unit: "회",
-        lowerIsBetter: false,
-        note: "그날 전 세트 반복을 더한 값. 맨몸 종목은 중량이 고정이라 이게 곧 볼륨입니다.",
-        value: (point) => point.totalReps,
-      },
-    ];
-  return [
+        ],
+        defaultKey: "topReps",
+      };
+    return {
+      modes: [
+        {
+          key: "sessionLoad",
+          label: "세션 부하",
+          unit: "kg",
+          lowerIsBetter: false,
+          showTopWeight: true,
+          note: "맨몸 종목은 체중에 추가중량을 더한 만큼이 실제로 드는 무게예요. 그 유효 부하로 그날 전 세트의 중량과 볼륨을 함께 계산한 값이라, 중량을 달수록·세트를 늘릴수록 올라갑니다. 체중이 늘면 같은 반복이어도 값이 올라갑니다.",
+          value: (point) => point.sessionLoad,
+        },
+        {
+          key: "e1rm",
+          label: "추정 1RM",
+          unit: "kg",
+          lowerIsBetter: false,
+          showTopWeight: true,
+          note: "유효 부하(체중 + 추가중량)로 환산한 추정 1RM = 부하 × (1 + 반복 ÷ 30). 그날 세트 중 가장 높은 값 하나만 보기 때문에 볼륨은 반영되지 않습니다.",
+          value: (point) => point.best1RM,
+        },
+        topRepsMode,
+        totalRepsMode,
+      ],
+      // 추가중량을 안 다는 종목은 부하가 체중 따라만 움직여서, 반복 수가 더 읽기 쉽다.
+      defaultKey: hasAddedLoad ? "sessionLoad" : "topReps",
+    };
+  }
+  return {
+    modes: [
     {
       key: "sessionLoad",
       label: "세션 부하",
@@ -953,10 +1030,12 @@ const trendModes = (
       showTopWeight: true,
       // 실제로 든 최고 중량이 아니라, 무게×반복을 1회 최대치로 환산한 값(Epley).
       // 60×10과 70×5의 강도를 같은 자로 비교하려고 쓴다.
-      note: "추정 1RM = 중량 × (1 + 반복 ÷ 30). 그날 세트 중 가장 높은 값 하나만 보기 때문에 볼륨은 반영되지 않고, 실제로 든 최고 중량과도 다릅니다.",
-      value: (point) => point.best1RM,
-    },
-  ];
+        note: "추정 1RM = 중량 × (1 + 반복 ÷ 30). 그날 세트 중 가장 높은 값 하나만 보기 때문에 볼륨은 반영되지 않고, 실제로 든 최고 중량과도 다릅니다.",
+        value: (point) => point.best1RM,
+      },
+    ],
+    defaultKey: "sessionLoad",
+  };
 };
 
 const prepareSetForSave = (set: WorkoutSet): WorkoutSet => {

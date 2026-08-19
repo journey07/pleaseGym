@@ -15,6 +15,7 @@ import {
   bodyweightForDate,
   detectAssisted,
   emptyLoad,
+  weightedBodyLoad,
   estimateOneRepMax,
   mergeLoad,
   sessionLoadFrom,
@@ -225,7 +226,7 @@ const systemPrompt = `당신은 EVERYONE BUT YOU의 불꽃 스파르타 스트�
 - stats.neglected: 방치 부위 목록(28일 공백이거나 10일+). ← 최우선으로 다뤄라.
 - stats.regions: 상체(가슴·등·어깨·팔), 하체(허벅지·종아리), 코어(복근·허리)별 { parts, weeklySets, weeklyVolume, monthlyVolume, freq7, freq28 }. 상체/하체 진단과 볼륨 비율의 근거다.
 - stats.exercises: 최근 28일 실제 수행한 전체 종목 인벤토리(최대 30) { name, part, metric, assisted, sessions28, sets28 }. 종목 선택 평가는 이 목록 전체를 근거로 한다.
-- stats.lifts[]: 종목별 시계열(kind=load는 sessionLoad·e1rm, kind=reps 맨몸은 topReps). kind=load에는 어시스티드 맨몸 운동도 포함(부하=체중−보조kg, 보조↓=성장). 보조 detail로만.
+- stats.lifts[]: 종목별 시계열(kind=load는 sessionLoad·e1rm, kind=reps 맨몸은 topReps가 1차). kind=load에는 어시스티드 맨몸 운동도 포함(부하=체중−보조kg, 보조↓=성장). kind=reps라도 체중을 알면 sessionLoad·e1rm이 붙는다(부하=체중+추가중량) → 추가중량을 단 종목은 topReps만 보지 말고 sessionLoad도 같이 봐라(맨몸 5회와 +20kg 5회는 topReps가 같다). 보조 detail로만.
 - sessionLoad(kg): 그날 전 세트의 중량+볼륨을 합친 대표 지표 = 볼륨가중 평균중량 × (1 + 총반복/30). 세트를 늘려도 무게를 올려도 오른다. 앱 그래프의 기본 선이고 실측 1RM이 아니다. e1rm은 그날 최고 세트 하나의 환산값이라 볼륨을 반영하지 않는다 → 성장 판단은 sessionLoad를 주로, 최대 강도만 볼 땐 e1rm을 본다. 두 값이 엇갈리면(sessionLoad↑ e1rm→) 볼륨은 늘었는데 강도가 정체라는 뜻.
 - stats.perWeekRecent/trackingDays: 빈도. bodyweight: { latest, deltaVs4wk(4주 전 대비 증감kg, null=비교불가), points } 또는 null.
 
@@ -333,9 +334,8 @@ function buildStats(
         // 플래그를 안 켜고 이름만 "assisted ..."인 경우도 보조로 잡는다.
         // 안 그러면 보조 중량이 추가중량(+kg)으로 뒤집혀 기록된다.
         const assisted = detectAssisted(name, exercise.assisted);
-        const bodyweight = assisted
-          ? bodyweightForDate(bodyweightLog, session.date)
-          : null;
+        // 가중 맨몸(딥스 +20kg 등)도 체중이 있어야 실제 부하를 알 수 있다.
+        const bodyweight = bodyweightForDate(bodyweightLog, session.date);
         if (assisted && bodyweight !== null) {
           let topWeight = 0;
           let repsAtTop = 0;
@@ -381,10 +381,16 @@ function buildStats(
           continue;
         }
 
-        // 기존 맨몸: reps가 진행 지표. weight는 추가중량(있으면 보조).
+        // 맨몸: reps가 1차 진행 지표. weight는 추가중량(있으면 보조).
+        // 체중을 알면 유효 부하(체중 + 추가중량)로 sessionLoad·e1rm까지 같이 실어 보낸다.
+        // 종목을 통째로 load 계열로 옮기지는 않는다. 추가중량을 단 날과 안 단 날이 섞이면
+        // 같은 종목이 load·reps 두 시계열로 쪼개지기 때문이다.
+        const canWeigh = !assisted && bodyweight !== null;
         let topReps = 0;
         let addedAtTop = 0;
         let repVolume = 0;
+        let bestE1rm = 0;
+        const load = emptyLoad();
         for (const set of doneSets) {
           const reps = Number(set.reps) || 0;
           // assisted인데 체중 로그가 없어 이 폴백에 온 경우: weight는 "보조량"이므로
@@ -392,6 +398,11 @@ function buildStats(
           const added = assisted ? 0 : Number(set.weight) || 0;
           if (reps <= 0) continue;
           repVolume += reps;
+          if (canWeigh) {
+            const effective = weightedBodyLoad(bodyweight, added);
+            addLoad(load, effective, reps);
+            bestE1rm = Math.max(bestE1rm, estimateOneRepMax(effective, reps));
+          }
           if (reps > topReps) {
             topReps = reps;
             addedAtTop = added;
@@ -402,9 +413,12 @@ function buildStats(
           date: session.date,
           topWeight: addedAtTop,
           repsAtTop: topReps,
-          e1rm: 0,
+          e1rm: round1(bestE1rm),
           volume: repVolume,
           topReps,
+          ...(canWeigh
+            ? { sessionLoad: round1(sessionLoadFrom(load)), load }
+            : {}),
         };
         const byDate =
           bwMap.get(normalizedName) ?? new Map<string, LiftPoint>();
@@ -414,9 +428,13 @@ function buildStats(
         } else {
           const best =
             (point.topReps ?? 0) > (existing.topReps ?? 0) ? point : existing;
+          const merged = mergeLoad(existing.load ?? emptyLoad(), load);
           byDate.set(session.date, {
             ...best,
             volume: existing.volume + point.volume,
+            ...(merged.volume > 0
+              ? { sessionLoad: round1(sessionLoadFrom(merged)), load: merged }
+              : {}),
           });
         }
         bwMap.set(normalizedName, byDate);

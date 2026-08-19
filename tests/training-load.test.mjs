@@ -12,6 +12,7 @@ import {
   mergeLoad,
   sessionLoadFrom,
   sessionLoadOf,
+  weightedBodyLoad,
 } from "../app/lib/trainingLoad.ts";
 
 const set = (weight, reps) => ({ weight, reps });
@@ -127,4 +128,30 @@ test("어시스티드 감지는 플래그가 없어도 이름으로 잡는다", 
   assert.equal(detectAssisted("풀업", true), true);
   assert.equal(detectAssisted("풀업"), false);
   assert.equal(detectAssisted("백 스쿼트"), false);
+});
+
+test("가중 맨몸은 추가중량만큼 유효 부하가 커진다", () => {
+  // 체중 80kg 기준. 맨몸 딥스는 80kg, 벨트에 20kg을 달면 100kg을 드는 셈.
+  assert.equal(weightedBodyLoad(80, 0), 80);
+  assert.equal(weightedBodyLoad(80, 20), 100);
+  // 음수 추가중량은 보조가 아니므로 무시한다(보조는 assistedLoad 쪽).
+  assert.equal(weightedBodyLoad(80, -5), 80);
+});
+
+test("맨몸 5회와 +20kg 5회를 구분한다", () => {
+  // 반복 수만 보면 둘 다 5회라 그래프가 똑같이 찍히던 문제.
+  const plain = sessionLoadOf(repeat(3, weightedBodyLoad(80, 0), 5));
+  const weighted = sessionLoadOf(repeat(3, weightedBodyLoad(80, 20), 5));
+  assert.ok(
+    weighted > plain,
+    `추가중량을 달았는데 값이 같다: ${weighted} vs ${plain}`,
+  );
+  near(plain, 80 * (1 + 15 / 30));
+  near(weighted, 100 * (1 + 15 / 30));
+});
+
+test("체중이 늘면 같은 맨몸 반복도 부하가 오른다", () => {
+  const lighter = sessionLoadOf(repeat(3, weightedBodyLoad(73, 0), 10));
+  const heavier = sessionLoadOf(repeat(3, weightedBodyLoad(80, 0), 10));
+  assert.ok(heavier > lighter);
 });
