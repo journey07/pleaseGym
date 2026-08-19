@@ -32,7 +32,14 @@ import {
   canonicalNameMap,
   normalizeExerciseName,
 } from "./lib/exerciseName";
-import { bestOneRepMax, sessionLoadOf } from "./lib/trainingLoad";
+import {
+  assistedLoad,
+  bestOneRepMax,
+  bodyweightForDate,
+  detectAssisted,
+  sessionLoadOf,
+  type BodyweightEntry,
+} from "./lib/trainingLoad";
 
 type SortableRenderProps = {
   setNodeRef: (node: HTMLElement | null) => void;
@@ -273,6 +280,7 @@ function ExerciseDetail({
   name,
   metric,
   assisted,
+  hasBodyweight,
   points,
   onPickDate,
   onClose,
@@ -280,6 +288,7 @@ function ExerciseDetail({
   name: string;
   metric: Metric;
   assisted: boolean;
+  hasBodyweight: boolean;
   points: TrendPoint[];
   onPickDate: (dateKey: string) => void;
   onClose: () => void;
@@ -292,7 +301,7 @@ function ExerciseDetail({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const modes = trendModes(metric, assisted);
+  const modes = trendModes(metric, assisted, hasBodyweight);
   const [modeKey, setModeKey] = useState(modes[0].key);
   const mode = modes.find((item) => item.key === modeKey) ?? modes[0];
   const values = points.map(mode.value);
@@ -462,11 +471,9 @@ const bodyGroup = (exercise: Exercise): BodyGroup => {
 const exerciseBodyPart = (exercise: Exercise): BodyPart =>
   exercise.bodyPart ?? inferBodyPart(exercise.name);
 
-// 어시스티드(보조) 종목 여부: 명시 플래그 또는 이름 키워드로 자동 감지.
-// 보조는 몸에서 빼주는 무게라 "최대"가 아니라 "최소"가 베스트다.
-const ASSISTED_NAME = /assisted|어시스티드|어시스트/i;
+// 어시스티드(보조) 종목 여부. 감지 규칙은 리포트와 공유한다(lib/trainingLoad).
 const isAssistedExercise = (exercise: Exercise): boolean =>
-  exercise.assisted === true || ASSISTED_NAME.test(exercise.name);
+  detectAssisted(exercise.name, exercise.assisted);
 
 // 보조 종목의 세트 중 weight>0 최소값(가장 적은 보조 = 베스트). 없으면 null.
 const minAssistWeight = (exercise: Exercise): number | null => {
@@ -773,10 +780,14 @@ type TrendPoint = {
 };
 
 // 한 종목의 세션별 기록을 날짜 오름차순으로 정리한다.
+// 어시스티드 종목은 기록된 weight가 "몸에서 빼주는 보조 중량"이라 그대로 쓰면 방향이 뒤집힌다.
+// 그날 체중이 있으면 유효 부하(체중 − 보조)로 환산해서 일반 중량 종목과 같은 자로 재고,
+// 체중 기록이 없으면 환산을 포기하고 보조 중량만 남긴다.
 const buildExerciseTrend = (
   history: Session[],
   name: string,
   metric: Metric,
+  bodyweightLog: BodyweightEntry[],
 ): TrendPoint[] => {
   const normalized = normalizeExerciseName(name);
   const points: TrendPoint[] = [];
@@ -790,15 +801,30 @@ const buildExerciseTrend = (
       const sets = exercise.sets.filter((set) => set.done);
       if (sets.length === 0) return;
       const assist = minAssistWeight(exercise);
+      const dateKey = sessionDateKey(session.date);
+      const bodyweight = isAssistedExercise(exercise)
+        ? bodyweightForDate(bodyweightLog, dateKey)
+        : null;
+      // 부하 지표(세션 부하·추정 1RM·최고 중량)는 이 환산된 세트로 계산한다.
+      const loadSets =
+        bodyweight === null
+          ? sets
+          : sets.map((set) => ({
+              weight: assistedLoad(bodyweight, set.weight),
+              reps: set.reps,
+            }));
       points.push({
-        date: sessionDateKey(session.date),
+        date: dateKey,
         sets: sets.length,
-        topWeight: sets.reduce((value, set) => Math.max(value, set.weight), 0),
-        best1RM: bestOneRepMax(sets),
-        sessionLoad: sessionLoadOf(sets),
+        topWeight: loadSets.reduce(
+          (value, set) => Math.max(value, set.weight),
+          0,
+        ),
+        best1RM: bestOneRepMax(loadSets),
+        sessionLoad: sessionLoadOf(loadSets),
         topReps: sets.reduce((value, set) => Math.max(value, set.reps), 0),
         totalReps: sets.reduce((sum, set) => sum + set.reps, 0),
-        volume: sets.reduce((sum, set) => sum + set.weight * set.reps, 0),
+        volume: loadSets.reduce((sum, set) => sum + set.weight * set.reps, 0),
         distanceKm: sets.reduce((sum, set) => sum + (set.distanceKm ?? 0), 0),
         minAssist: isAssistedExercise(exercise) ? assist : null,
         summary:
@@ -832,7 +858,23 @@ type TrendMode = {
   value: (point: TrendPoint) => number;
 };
 
-const trendModes = (metric: Metric, assisted: boolean): TrendMode[] => {
+const assistMode: TrendMode = {
+  key: "assist",
+  label: "보조 중량",
+  unit: "kg",
+  lowerIsBetter: true,
+  note: "그날 세트 중 가장 가벼운 보조 중량. 몸에서 빼주는 무게라 낮을수록 좋아요.",
+  // 보조를 아예 안 쓴 날은 minAssist가 null이다. topWeight는 유효 부하라 폴백으로 못 쓴다.
+  value: (point) => point.minAssist ?? 0,
+};
+
+// hasBodyweight: 그 종목 기록 시점의 체중을 알 수 있는지. 어시스티드는 체중이 있어야
+// 유효 부하(체중 − 보조)로 환산할 수 있고, 없으면 보조 중량 하나만 보여준다.
+const trendModes = (
+  metric: Metric,
+  assisted: boolean,
+  hasBodyweight: boolean,
+): TrendMode[] => {
   if (metric === "distance")
     return [
       {
@@ -845,16 +887,34 @@ const trendModes = (metric: Metric, assisted: boolean): TrendMode[] => {
       },
     ];
   if (assisted)
-    return [
-      {
-        key: "assist",
-        label: "보조 중량",
-        unit: "kg",
-        lowerIsBetter: true,
-        note: "그날 세트 중 가장 가벼운 보조 중량. 몸에서 빼주는 무게라 낮을수록 좋아요.",
-        value: (point) => point.minAssist ?? point.topWeight,
-      },
-    ];
+    return hasBodyweight
+      ? [
+          {
+            key: "sessionLoad",
+            label: "세션 부하",
+            unit: "kg",
+            lowerIsBetter: false,
+            showTopWeight: true,
+            note: "보조 종목은 체중에서 보조 중량을 뺀 만큼이 실제로 드는 무게예요. 그 유효 부하로 그날 전 세트의 중량과 볼륨을 함께 계산한 값이라, 보조를 줄일수록·세트를 늘릴수록 올라갑니다.",
+            value: (point) => point.sessionLoad,
+          },
+          {
+            key: "e1rm",
+            label: "추정 1RM",
+            unit: "kg",
+            lowerIsBetter: false,
+            showTopWeight: true,
+            note: "유효 부하(체중 − 보조)로 환산한 추정 1RM = 부하 × (1 + 반복 ÷ 30). 그날 세트 중 가장 높은 값 하나만 보기 때문에 볼륨은 반영되지 않습니다.",
+            value: (point) => point.best1RM,
+          },
+          assistMode,
+        ]
+      : [
+          {
+            ...assistMode,
+            note: "그날 세트 중 가장 가벼운 보조 중량. 몸에서 빼주는 무게라 낮을수록 좋아요. 체중을 기록하면 체중 − 보조로 실제 부하까지 계산해 드려요.",
+          },
+        ];
   if (metric === "bodyweight")
     return [
       {
@@ -929,6 +989,8 @@ export default function Home() {
   const [neonReady, setNeonReady] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [toast, setToast] = useState("");
+  // 어시스티드 종목의 유효 부하(체중 − 보조)를 계산하려면 그날 체중이 필요하다.
+  const [bodyweightLog, setBodyweightLog] = useState<BodyweightEntry[]>([]);
   const [report, setReport] = useState<TrainingReport | null>(null);
   const [reportStats, setReportStats] = useState<TrainingStats | null>(null);
   const [reportDate, setReportDate] = useState("");
@@ -1037,6 +1099,31 @@ export default function Home() {
     // This runs once after both local caches have been hydrated.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, favoritesLoaded]);
+
+  // 체중 로그. 없으면 어시스티드 그래프는 보조 중량만 보여주고 넘어간다.
+  useEffect(() => {
+    let cancelled = false;
+    const loadBodyweight = async () => {
+      try {
+        const response = await fetch("/api/bodyweight", { cache: "no-store" });
+        if (!response.ok) return;
+        const data = (await response.json()) as { log?: unknown };
+        if (cancelled || !Array.isArray(data.log)) return;
+        setBodyweightLog(
+          (data.log as BodyweightEntry[]).filter(
+            (entry) =>
+              typeof entry?.date === "string" && Number.isFinite(entry?.kg),
+          ),
+        );
+      } catch {
+        // 체중을 못 읽어도 나머지 지표는 그대로 동작해야 한다.
+      }
+    };
+    void loadBodyweight();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!neonReady) return;
@@ -1243,9 +1330,14 @@ export default function Home() {
   const detailPoints = useMemo(
     () =>
       detailTarget
-        ? buildExerciseTrend(history, detailTarget.name, detailTarget.metric)
+        ? buildExerciseTrend(
+            history,
+            detailTarget.name,
+            detailTarget.metric,
+            bodyweightLog,
+          )
         : [],
-    [history, detailTarget],
+    [history, detailTarget, bodyweightLog],
   );
 
   const coachInsight = useMemo(() => {
@@ -2329,6 +2421,7 @@ export default function Home() {
           name={detailTarget.name}
           metric={detailTarget.metric}
           assisted={detailTarget.assisted}
+          hasBodyweight={bodyweightLog.length > 0}
           points={detailPoints}
           onPickDate={(dateKey) => {
             const date = dateFromKey(dateKey);

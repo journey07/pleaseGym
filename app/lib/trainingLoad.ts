@@ -71,3 +71,36 @@ export const sessionLoadOf = (
   sets.forEach((set) => addLoad(acc, set.weight, set.reps));
   return sessionLoadFrom(acc);
 };
+
+// ── 어시스티드(보조) 종목 ────────────────────────────────────────────────
+// 보조 머신은 몸무게에서 보조 중량을 빼준 만큼이 실제로 드는 부하다.
+// 보조가 가벼워질수록 부하가 커지므로, 유효 부하로 환산하면 일반 중량 종목과
+// 똑같이 "클수록 좋음"으로 다룰 수 있다.
+
+// 어시스티드 종목 감지: 명시 플래그가 우선이고, 안 켰으면 이름 키워드로 잡는다.
+// 화면과 리포트가 같은 기준을 써야 한 쪽만 보조를 추가중량으로 오해하는 일이 없다.
+const ASSISTED_NAME = /assisted|어시스티드|어시스트/i;
+
+export const detectAssisted = (name: string, assisted?: boolean): boolean =>
+  assisted === true || ASSISTED_NAME.test(name);
+
+export type BodyweightEntry = { date: string; kg: number };
+
+// 그 날짜 시점의 체중. 그 전 기록 중 가장 최근 값을 쓰고,
+// 첫 기록보다 이른 날짜면 첫 기록으로 대신한다. 기록이 없으면 null.
+export const bodyweightForDate = (
+  log: BodyweightEntry[],
+  date: string,
+): number | null => {
+  if (log.length === 0) return null;
+  let latest: BodyweightEntry | undefined;
+  for (const entry of log) {
+    if (entry.date.slice(0, 10) > date) break;
+    latest = entry;
+  }
+  return (latest ?? log[0]).kg;
+};
+
+// 유효 부하 = 체중 − 보조. 보조가 체중을 넘겨도 0 이하로는 안 떨어뜨린다.
+export const assistedLoad = (bodyweight: number, assistKg: number): number =>
+  Math.max(bodyweight - Math.max(assistKg, 0), 1);

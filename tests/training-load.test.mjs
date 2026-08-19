@@ -3,7 +3,10 @@ import test from "node:test";
 
 import {
   addLoad,
+  assistedLoad,
   bestOneRepMax,
+  bodyweightForDate,
+  detectAssisted,
   emptyLoad,
   estimateOneRepMax,
   mergeLoad,
@@ -80,4 +83,48 @@ test("같은 날 두 번 기록한 걸 합치면 한 번에 기록한 것과 같
   const merged = sessionLoadFrom(mergeLoad(morning, evening));
   const together = sessionLoadOf([...repeat(3, 100, 5), ...repeat(2, 80, 8)]);
   near(merged, together, 1e-9);
+});
+
+test("어시스티드는 보조가 가벼울수록 유효 부하가 커진다", () => {
+  // 체중 80kg 기준. 보조 30kg → 50kg을 드는 셈, 보조 10kg → 70kg.
+  assert.equal(assistedLoad(80, 30), 50);
+  assert.equal(assistedLoad(80, 10), 70);
+  assert.equal(assistedLoad(80, 0), 80);
+  // 보조가 체중을 넘겨도 0 이하로는 안 내려간다.
+  assert.equal(assistedLoad(80, 200), 1);
+
+  const heavyAssist = sessionLoadOf(repeat(4, assistedLoad(80, 30), 8));
+  const lightAssist = sessionLoadOf(repeat(4, assistedLoad(80, 10), 8));
+  assert.ok(
+    lightAssist > heavyAssist,
+    `보조를 줄였는데 값이 안 올랐다: ${lightAssist} <= ${heavyAssist}`,
+  );
+});
+
+test("어시스티드도 세트를 늘리면 값이 오른다", () => {
+  const load = assistedLoad(80, 20);
+  assert.ok(
+    sessionLoadOf(repeat(5, load, 8)) > sessionLoadOf(repeat(3, load, 8)),
+  );
+});
+
+test("그 날짜 시점의 체중을 고른다", () => {
+  const log = [
+    { date: "2026-01-01", kg: 80 },
+    { date: "2026-03-01", kg: 76 },
+  ];
+  assert.equal(bodyweightForDate(log, "2026-02-01"), 80);
+  assert.equal(bodyweightForDate(log, "2026-03-01"), 76);
+  assert.equal(bodyweightForDate(log, "2026-06-01"), 76);
+  // 첫 기록보다 이른 날짜는 첫 기록으로 대신한다.
+  assert.equal(bodyweightForDate(log, "2025-12-01"), 80);
+  assert.equal(bodyweightForDate([], "2026-02-01"), null);
+});
+
+test("어시스티드 감지는 플래그가 없어도 이름으로 잡는다", () => {
+  assert.equal(detectAssisted("어시스티드 풀업"), true);
+  assert.equal(detectAssisted("Assisted Pull-up"), true);
+  assert.equal(detectAssisted("풀업", true), true);
+  assert.equal(detectAssisted("풀업"), false);
+  assert.equal(detectAssisted("백 스쿼트"), false);
 });

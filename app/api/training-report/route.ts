@@ -11,6 +11,9 @@ import {
 import { inferBodyPart, type BodyPart } from "@/app/lib/bodyPart";
 import {
   addLoad,
+  assistedLoad,
+  bodyweightForDate,
+  detectAssisted,
   emptyLoad,
   estimateOneRepMax,
   mergeLoad,
@@ -269,19 +272,6 @@ const ownerId = () => process.env.FIRST_REP_OWNER_ID ?? "local-owner";
 
 const round1 = (value: number) => Math.round(value * 10) / 10;
 
-const bodyweightForDate = (
-  bodyweightLog: BodyweightEntry[],
-  date: string,
-): number | null => {
-  if (bodyweightLog.length === 0) return null;
-  let latest: BodyweightEntry | undefined;
-  for (const entry of bodyweightLog) {
-    if (entry.date.slice(0, 10) > date) break;
-    latest = entry;
-  }
-  return (latest ?? bodyweightLog[0]).kg;
-};
-
 function buildStats(
   history: PostedSession[],
   bodyweightLog: BodyweightEntry[],
@@ -340,11 +330,13 @@ function buildStats(
       }
 
       if (exercise.metric === "bodyweight") {
-        const bodyweight =
-          exercise.assisted === true
-            ? bodyweightForDate(bodyweightLog, session.date)
-            : null;
-        if (exercise.assisted === true && bodyweight !== null) {
+        // 플래그를 안 켜고 이름만 "assisted ..."인 경우도 보조로 잡는다.
+        // 안 그러면 보조 중량이 추가중량(+kg)으로 뒤집혀 기록된다.
+        const assisted = detectAssisted(name, exercise.assisted);
+        const bodyweight = assisted
+          ? bodyweightForDate(bodyweightLog, session.date)
+          : null;
+        if (assisted && bodyweight !== null) {
           let topWeight = 0;
           let repsAtTop = 0;
           let bestE1rm = 0;
@@ -352,8 +344,7 @@ function buildStats(
           for (const set of doneSets) {
             const reps = Number(set.reps) || 0;
             if (reps <= 0) continue;
-            const assist = Math.max(Number(set.weight) || 0, 0);
-            const effectiveLoad = Math.max(bodyweight - assist, 1);
+            const effectiveLoad = assistedLoad(bodyweight, Number(set.weight) || 0);
             addLoad(load, effectiveLoad, reps);
             bestE1rm = Math.max(bestE1rm, estimateOneRepMax(effectiveLoad, reps));
             if (effectiveLoad > topWeight) {
@@ -398,8 +389,7 @@ function buildStats(
           const reps = Number(set.reps) || 0;
           // assisted인데 체중 로그가 없어 이 폴백에 온 경우: weight는 "보조량"이므로
           // 추가중량(+kg)으로 오해되지 않게 0 처리(부호 반전 방지).
-          const added =
-            exercise.assisted === true ? 0 : Number(set.weight) || 0;
+          const added = assisted ? 0 : Number(set.weight) || 0;
           if (reps <= 0) continue;
           repVolume += reps;
           if (reps > topReps) {
@@ -566,7 +556,7 @@ function buildStats(
         name: canonicalNames.get(normalizedName) ?? name,
         part,
         metric: String(exercise.metric ?? "weight"),
-        assisted: exercise.assisted === true,
+        assisted: detectAssisted(name, exercise.assisted),
         sets28: 0,
         dates: new Set<string>(),
       };
