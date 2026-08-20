@@ -27,7 +27,9 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import BodyLoadMap from "./BodyLoadMap";
 import { BodyPart, BODY_PARTS, inferBodyPart } from "./lib/bodyPart";
+import { computeBodyPartStats } from "./lib/bodyPartStats";
 import {
   canonicalNameMap,
   normalizeExerciseName,
@@ -1414,6 +1416,12 @@ export default function Home() {
     };
   }, [draft]);
 
+  // 부위별 부하는 기록만 있으면 계산되므로 AI 분석을 돌리기 전에도 보여준다.
+  const bodyPartStats = useMemo(
+    () => computeBodyPartStats(history, todayKey),
+    [history, todayKey],
+  );
+
   const detailPoints = useMemo(
     () =>
       detailTarget
@@ -1877,6 +1885,8 @@ export default function Home() {
                 : "AI 분석 실행"}
           </button>
         </div>
+
+        <BodyLoadMap stats={bodyPartStats} />
 
         {reportStatus === "error" && (
           <p className="report-error" role="alert">
