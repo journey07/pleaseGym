@@ -2,11 +2,11 @@
 
 ## Required Vercel environment variables
 
-- `OPENAI_API_KEY`: OpenAI API project key. **Required** — the morning coach returns a 503 without it.
+- `OPENAI_API_KEY`: OpenAI API project key. **Required** — the AI coach returns a 503 without it.
 - `DATABASE_URL`: Neon pooled Postgres connection string. Auto-injected by the Vercel ↔ Neon integration (see below).
 - `FIRST_REP_OWNER_ID`: a private random identifier used to partition this personal app's rows.
 
-> The OpenAI model is hardcoded in code (`OPENAI_MODEL = "gpt-5.6-luna"` in `app/api/morning-coach/route.ts`).
+> The OpenAI model is hardcoded in code (`OPENAI_MODEL = "gpt-5.6-luna"` in `app/api/training-report/route.ts`).
 > It is **not** an environment variable anymore — any leftover `OPENAI_MODEL` var in Vercel is ignored and can be removed.
 
 ## Connect Neon via the Vercel integration

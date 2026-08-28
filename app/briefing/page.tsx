@@ -12,29 +12,6 @@ import {
 
 type Decision = "go" | "no_go";
 
-type CoachResult = {
-  decision: Decision;
-  headline: string;
-  message: string;
-  nextAction: "start" | "minimum" | "rest";
-  safetyNote: string;
-  progressNote: string;
-  todaySplit?: "upper" | "lower" | "full" | "rest";
-  todayPlan?: Array<{
-    name: string;
-    target: string;
-    note: string;
-    lastDate: string;
-  }>;
-};
-
-const splitLabel = {
-  upper: "상체",
-  lower: "하체",
-  full: "전신",
-  rest: "휴식",
-} as const;
-
 type StoredSet = {
   id: string;
   weight: number;
@@ -53,11 +30,6 @@ type StoredExercise = {
 type StoredSession = {
   date?: string;
   exercises?: StoredExercise[];
-};
-
-type StoredFavorite = {
-  name?: string;
-  metric?: "weight" | "distance";
 };
 
 type MorningVideo = {
@@ -116,115 +88,29 @@ const readArray = <T,>(key: string): T[] => {
   }
 };
 
-type CoachResultCache = {
-  date: string;
-  decision: Decision;
-  coach: CoachResult;
-};
-
-const readCoachResultCache = (): CoachResultCache | null => {
-  try {
-    const raw = window.localStorage.getItem("first-rep-coach-result");
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as CoachResultCache;
-    if (parsed && typeof parsed.date === "string" && parsed.coach) {
-      // Drop a stale (previous-day) cache so it never briefly shows after midnight.
-      if (parsed.date !== todayKey()) {
-        window.localStorage.removeItem("first-rep-coach-result");
-        return null;
-      }
-      return parsed;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-};
-
-const writeCoachResultCache = (value: CoachResultCache) => {
-  try {
-    window.localStorage.setItem(
-      "first-rep-coach-result",
-      JSON.stringify(value),
-    );
-  } catch {
-    // Best-effort cache; ignore quota/serialization failures.
-  }
-};
-
-const readCoachSource = async () => {
+const readWorkoutHistory = async () => {
   try {
     const response = await fetch("/api/state", { cache: "no-store" });
     if (response.ok) {
       const data = (await response.json()) as {
-        state?: { history?: unknown; favorites?: unknown } | null;
+        state?: { history?: unknown } | null;
       };
       if (data.state) {
         const history = Array.isArray(data.state.history)
           ? (data.state.history as StoredSession[])
           : [];
-        const favorites = Array.isArray(data.state.favorites)
-          ? (data.state.favorites as StoredFavorite[])
-          : [];
         window.localStorage.setItem(
           "first-rep-history",
           JSON.stringify(history),
         );
-        window.localStorage.setItem(
-          "first-rep-favorites",
-          JSON.stringify(favorites),
-        );
-        return { history, favorites };
+        return history;
       }
     }
   } catch {
     // Fall through to the offline cache.
   }
 
-  return {
-    history: readArray<StoredSession>("first-rep-history"),
-    favorites: readArray<StoredFavorite>("first-rep-favorites"),
-  };
-};
-
-const buildCoachContext = async () => {
-  const source = await readCoachSource();
-  const history = source.history
-    .filter(
-      (session) =>
-        typeof session.date === "string" && Array.isArray(session.exercises),
-    )
-    .sort((a, b) => String(b.date).localeCompare(String(a.date)))
-    .slice(0, 6)
-    .map((session) => ({
-      date: session.date,
-      exercises: (session.exercises ?? []).slice(0, 8).map((exercise) => {
-        const sets = Array.isArray(exercise.sets)
-          ? exercise.sets.filter((set) => set.done)
-          : [];
-        const isDistance = exercise.metric === "distance";
-        const heaviest = sets.reduce(
-          (best, set) => (set.weight > best.weight ? set : best),
-          { weight: 0, reps: 0 },
-        );
-        return {
-          name: String(exercise.name ?? "").slice(0, 60),
-          metric: isDistance ? "distance" : "weight",
-          maxKg: isDistance ? 0 : heaviest.weight,
-          repsAtMax: isDistance ? 0 : heaviest.reps,
-          distanceKm: isDistance
-            ? sets.reduce((sum, set) => sum + (set.distanceKm ?? 0), 0)
-            : 0,
-        };
-      }),
-    }));
-
-  const favorites = source.favorites.slice(0, 20).map((favorite) => ({
-    name: String(favorite.name ?? "").slice(0, 60),
-    metric: favorite.metric === "distance" ? "distance" : "weight",
-  }));
-
-  return { date: todayKey(), recentSessions: history, favorites };
+  return readArray<StoredSession>("first-rep-history");
 };
 
 const storeDecision = (decision: Decision) => {
@@ -256,11 +142,6 @@ export default function MorningBridge() {
   const [dateLabel, setDateLabel] = useState("");
   const [decision, setDecision] = useState<Decision | null>(null);
   const [todayDecision, setTodayDecision] = useState<Decision | null>(null);
-  const [coach, setCoach] = useState<CoachResult | null>(null);
-  const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">(
-    "idle",
-  );
-  const [error, setError] = useState("");
   const [missionStats, setMissionStats] = useState<MissionStats>(() =>
     computeMissionStats({ sessions: [], todayKey: "1970-01-01" }),
   );
@@ -306,7 +187,7 @@ export default function MorningBridge() {
     );
     setMissionStats(readMissionStats());
       setVisionSessions(readStoredSessions());
-    void readCoachSource().then(() => {
+    void readWorkoutHistory().then(() => {
       if (!cancelled) setMissionStats(readMissionStats());
       setVisionSessions(readStoredSessions());
     });
@@ -318,14 +199,6 @@ export default function MorningBridge() {
     const todays = decisions.find((item) => item.date === todayKey());
     if (todays?.decision === "go" || todays?.decision === "no_go") {
       setTodayDecision(todays.decision);
-    }
-    // If we cached today's coach result, restore the whole card without another request.
-    const cached = readCoachResultCache();
-    if (cached && cached.date === todayKey()) {
-      setTodayDecision(cached.decision);
-      setDecision(cached.decision);
-      setCoach(cached.coach);
-      setStatus("done");
     }
     return () => {
       cancelled = true;
@@ -340,14 +213,12 @@ export default function MorningBridge() {
 
     const hydrateDecisionFromServer = async () => {
       try {
-        const response = await fetch("/api/morning-coach", {
+        const response = await fetch("/api/morning-decision", {
           cache: "no-store",
         });
         if (!response.ok) return;
         const data = (await response.json()) as {
           decision?: Decision | null;
-          coach?: CoachResult | null;
-          date?: string;
         };
         if (cancelled) return;
         // If the user already committed a decision on this device while the GET
@@ -360,16 +231,6 @@ export default function MorningBridge() {
         setMissionStats(readMissionStats());
       setVisionSessions(readStoredSessions());
         setDecision(data.decision);
-
-        if (data.coach) {
-          setCoach(data.coach);
-          setStatus("done");
-          writeCoachResultCache({
-            date: data.date ?? todayKey(),
-            decision: data.decision,
-            coach: data.coach,
-          });
-        }
       } catch {
         // Offline → the localStorage restore above remains the source.
       }
@@ -625,31 +486,9 @@ export default function MorningBridge() {
   );
 
   const choose = async (nextDecision: Decision) => {
-    if (status === "loading") return;
     userActedRef.current = true;
 
-    // Re-selecting the same decision that already has a coached plan → render the cache, no re-POST.
-    if (nextDecision === todayDecision) {
-      const cached = readCoachResultCache();
-      if (
-        cached &&
-        cached.date === todayKey() &&
-        cached.decision === nextDecision
-      ) {
-        setDecision(nextDecision);
-        setCoach(cached.coach);
-        setError("");
-        setStatus("done");
-        setSkipOpen(false);
-        clearSkipHold();
-        return;
-      }
-    }
-
     setDecision(nextDecision);
-    setCoach(null);
-    setError("");
-    setStatus("loading");
     setSkipOpen(false);
     clearSkipHold();
 
@@ -667,51 +506,19 @@ export default function MorningBridge() {
     }
 
     try {
-      const context = await buildCoachContext();
-      setMissionStats(readMissionStats());
-      setVisionSessions(readStoredSessions());
-      const response = await fetch("/api/morning-coach", {
+      const response = await fetch("/api/morning-decision", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          decision: nextDecision,
-          context,
-        }),
+        body: JSON.stringify({ decision: nextDecision }),
       });
-      const data = (await response.json()) as {
-        coach?: CoachResult;
-        error?: string;
-        code?: string;
-      };
-      if (!response.ok || !data.coach) {
-        const suffix =
-          data.code === "openai_not_configured"
-            ? " 서버에 OPENAI_API_KEY를 설정하면 바로 활성화됩니다."
-            : "";
-        throw new Error(
-          `${data.error ?? "AI 코치 응답을 받지 못했습니다."}${suffix}`,
-        );
-      }
-      setCoach(data.coach);
-      setStatus("done");
-      // Cache today's result for reload restore and same-decision duplicate guard (incl. DB-less local).
-      writeCoachResultCache({
-        date: todayKey(),
-        decision: nextDecision,
-        coach: data.coach,
-      });
-    } catch (requestError) {
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "AI 코치 연결에 실패했습니다.",
-      );
-      setStatus("error");
+      if (!response.ok) throw new Error("결정을 저장하지 못했습니다.");
+    } catch {
+      // The local decision remains available if Neon is temporarily unavailable.
     }
   };
 
   const startSkipHold = () => {
-    if (skipHolding || status === "loading") return;
+    if (skipHolding) return;
     const startedAt = performance.now();
     setSkipHolding(true);
     setSkipProgress(1);
@@ -895,7 +702,7 @@ export default function MorningBridge() {
           <p>
             {decision === null
               ? "목표는 운동을 잘하는 게 아닙니다. 헬스장에 도착해 첫 세트를 시작하는 것입니다."
-              : "결정은 기록됐습니다. AI가 바로 다음 행동만 정리합니다."}
+              : "오늘의 결정이 기록됐습니다."}
           </p>
         </div>
 
@@ -914,7 +721,6 @@ export default function MorningBridge() {
             <button
               className="quest-accept"
               onClick={() => choose("go")}
-              disabled={status === "loading"}
             >
               <span>퀘스트 수락 · 지금 출발</span>
               <b aria-hidden="true">→</b>
@@ -981,87 +787,6 @@ export default function MorningBridge() {
               {decision === "go" ? "QUEST ACCEPTED" : "QUEST ABANDONED"}
             </span>
           </div>
-        )}
-
-        {status === "loading" && (
-          <div className="coach-loading" role="status">
-            <span />
-            <p>최근 기록을 읽고 있습니다.</p>
-          </div>
-        )}
-
-        {status === "error" && (
-          <section className="coach-error" role="alert">
-            <b>결정은 저장됐습니다.</b>
-            <p>{error}</p>
-            <div>
-              <button onClick={() => decision && choose(decision)}>
-                다시 연결
-              </button>
-              <Link href="/">달력으로 이동</Link>
-            </div>
-          </section>
-        )}
-
-        {status === "done" && coach && (
-          <section className="coach-result">
-            <div className="coach-result-head">
-              <span>OPENAI COACH</span>
-              <i>{coach.nextAction}</i>
-            </div>
-            <h2>{coach.headline}</h2>
-            <p>{coach.message}</p>
-
-            {coach.decision === "go" &&
-              coach.todayPlan &&
-              coach.todayPlan.length > 0 && (
-                <div className="coach-plan">
-                  <span>
-                    TODAY · {splitLabel[coach.todaySplit ?? "full"]}
-                  </span>
-                  {coach.todayPlan.map((item, index) => (
-                    <div
-                      className="coach-plan-row"
-                      key={`${item.name}-${index}`}
-                    >
-                      <div>
-                        <b>
-                          {item.name}
-                          <small>{item.lastDate}</small>
-                        </b>
-                        <strong>{item.target}</strong>
-                      </div>
-                      <p>{item.note}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-            {coach.progressNote && (
-              <p className="coach-progress">
-                <span>PROGRESS</span>
-                {coach.progressNote}
-              </p>
-            )}
-
-            <small className="safety-note">{coach.safetyNote}</small>
-            <div className="coach-actions">
-              <Link className="primary" href="/">
-                {coach.decision === "go" ? "운동 시작 →" : "오늘 결정 완료"}
-              </Link>
-              <button
-                className="secondary"
-                onClick={() => {
-                  setDecision(null);
-                  setCoach(null);
-                  setStatus("idle");
-                  setSkipOpen(false);
-                }}
-              >
-                결정 바꾸기
-              </button>
-            </div>
-          </section>
         )}
 
         <section className="video-section" aria-label="아침 영상 목록">

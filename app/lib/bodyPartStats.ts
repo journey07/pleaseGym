@@ -3,6 +3,12 @@
 // 부위는 exercise.bodyPart(수동 교정 우선) ?? inferBodyPart(name).
 
 import { BodyPart, MUSCLE_PARTS, inferBodyPart } from "./bodyPart";
+import {
+  assistedLoad,
+  bodyweightForDate,
+  detectAssisted,
+  type BodyweightEntry,
+} from "./trainingLoad";
 
 export type StatSet = {
   weight?: number;
@@ -22,8 +28,11 @@ export type StatSession = { date?: string; exercises?: StatExercise[] };
 export type BodyPartStat = {
   part: BodyPart;
   weeklySets: number; // 최근 7일 유효 세트 수
-  weeklyVolume: number; // 최근 7일 볼륨(중량=Σw×r, 맨몸=Σreps)
-  monthlyVolume: number; // 최근 28일 볼륨
+  weeklyWeightVolume: number; // 최근 7일 중량 볼륨(Σw×r)
+  weeklyRepVolume: number; // 최근 7일 맨몸 반복수
+  monthlyWeightVolume: number; // 최근 28일 중량 볼륨
+  monthlyRepVolume: number; // 최근 28일 맨몸 반복수
+  monthlySets: number; // 최근 28일 유효 세트 수
   lastTrainedDate: string | null;
   daysSinceLast: number | null; // today 기준 경과일
   freq7: number; // 최근 7일 이 부위를 건드린 세션 수
@@ -43,21 +52,30 @@ const daysBetween = (fromKey: string, toKey: string): number => {
 // 한 운동의 볼륨과 유효 세트 수. 거리(유산소)는 부위 집계 대상 아님 → null.
 const exerciseVolume = (
   ex: StatExercise,
-): { volume: number; sets: number } | null => {
+  date: string,
+  bodyweightLog?: BodyweightEntry[],
+): { weightVolume: number; repVolume: number; sets: number } | null => {
   if (ex.metric === "distance") return null;
   const done = (ex.sets ?? []).filter((s) => s?.done !== false);
-  let volume = 0;
+  let weightVolume = 0;
+  let repVolume = 0;
   let sets = 0;
   for (const s of done) {
     const reps = Number(s.reps) || 0;
     if (reps <= 0) continue;
     const weight = Number(s.weight) || 0;
-    // TODO: assisted bodyweight 볼륨은 날짜별 체중을 전달할 수 있을 때 실제부하로 집계한다.
-    volume += ex.metric === "bodyweight" ? reps : weight * reps;
+    if (detectAssisted(String(ex.name ?? ""), ex.assisted)) {
+      const bodyweight = bodyweightLog
+        ? bodyweightForDate(bodyweightLog, date)
+        : null;
+      if (bodyweight === null) repVolume += reps;
+      else weightVolume += assistedLoad(bodyweight, weight) * reps;
+    } else if (ex.metric === "bodyweight") repVolume += reps;
+    else weightVolume += weight * reps;
     sets += 1;
   }
   if (sets === 0) return null;
-  return { volume, sets };
+  return { weightVolume, repVolume, sets };
 };
 
 const partOf = (ex: StatExercise): BodyPart =>
@@ -65,33 +83,40 @@ const partOf = (ex: StatExercise): BodyPart =>
 
 /**
  * 근육 8부위(기타·거리 제외) 집계. todayKey(YYYY-MM-DD) 기준 상대 창.
- * weeklyVolume 내림차순 정렬(편중 파악 쉽게).
+ * weeklySets 내림차순 정렬(편중 파악 쉽게).
  */
 export const computeBodyPartStats = (
   sessions: StatSession[],
   todayKey: string,
+  bodyweightLog?: BodyweightEntry[],
 ): BodyPartStat[] => {
   const acc = new Map<
     BodyPart,
     {
       weeklySets: number;
-      weeklyVolume: number;
-      monthlyVolume: number;
+      weeklyWeightVolume: number;
+      weeklyRepVolume: number;
+      monthlyWeightVolume: number;
+      monthlyRepVolume: number;
+      monthlySets: number;
       lastTrainedDate: string | null;
       days7: Set<string>;
       days28: Set<string>;
-      weekVolume: [number, number, number, number]; // 주1(최근)~주4
+      weekSets: [number, number, number, number]; // 주1(최근)~주4
     }
   >();
   for (const part of MUSCLE_PARTS) {
     acc.set(part, {
       weeklySets: 0,
-      weeklyVolume: 0,
-      monthlyVolume: 0,
+      weeklyWeightVolume: 0,
+      weeklyRepVolume: 0,
+      monthlyWeightVolume: 0,
+      monthlyRepVolume: 0,
+      monthlySets: 0,
       lastTrainedDate: null,
       days7: new Set(),
       days28: new Set(),
-      weekVolume: [0, 0, 0, 0],
+      weekSets: [0, 0, 0, 0],
     });
   }
 
@@ -101,18 +126,21 @@ export const computeBodyPartStats = (
     const ago = daysBetween(date, todayKey);
     if (ago < 0 || ago > 27) continue; // 최근 28일만
     for (const ex of session.exercises) {
-      const vol = exerciseVolume(ex);
+      const vol = exerciseVolume(ex, date, bodyweightLog);
       if (!vol) continue;
       const part = partOf(ex);
       const a = acc.get(part);
       if (!a) continue; // 기타는 MUSCLE_PARTS에 없음 → 스킵
 
-      a.monthlyVolume += vol.volume;
+      a.monthlyWeightVolume += vol.weightVolume;
+      a.monthlyRepVolume += vol.repVolume;
+      a.monthlySets += vol.sets;
       a.days28.add(date);
       const week = Math.min(3, Math.floor(ago / 7));
-      a.weekVolume[week] += vol.volume;
+      a.weekSets[week] += vol.sets;
       if (ago <= 6) {
-        a.weeklyVolume += vol.volume;
+        a.weeklyWeightVolume += vol.weightVolume;
+        a.weeklyRepVolume += vol.repVolume;
         a.weeklySets += vol.sets;
         a.days7.add(date);
       }
@@ -124,9 +152,9 @@ export const computeBodyPartStats = (
 
   const result: BodyPartStat[] = MUSCLE_PARTS.map((part) => {
     const a = acc.get(part)!;
-    const nonZeroWeeks = a.weekVolume.filter((v) => v > 0).length;
-    const recent = a.weekVolume[0] + a.weekVolume[1];
-    const older = a.weekVolume[2] + a.weekVolume[3];
+    const nonZeroWeeks = a.weekSets.filter((v) => v > 0).length;
+    const recent = a.weekSets[0] + a.weekSets[1];
+    const older = a.weekSets[2] + a.weekSets[3];
     let trend: BodyPartStat["trend"];
     if (nonZeroWeeks <= 1) trend = "new";
     else if (recent > older * 1.1) trend = "up";
@@ -135,8 +163,11 @@ export const computeBodyPartStats = (
     return {
       part,
       weeklySets: a.weeklySets,
-      weeklyVolume: Math.round(a.weeklyVolume),
-      monthlyVolume: Math.round(a.monthlyVolume),
+      weeklyWeightVolume: Math.round(a.weeklyWeightVolume),
+      weeklyRepVolume: Math.round(a.weeklyRepVolume),
+      monthlyWeightVolume: Math.round(a.monthlyWeightVolume),
+      monthlyRepVolume: Math.round(a.monthlyRepVolume),
+      monthlySets: a.monthlySets,
       lastTrainedDate: a.lastTrainedDate,
       daysSinceLast: a.lastTrainedDate
         ? daysBetween(a.lastTrainedDate, todayKey)
@@ -147,7 +178,11 @@ export const computeBodyPartStats = (
     };
   });
 
-  return result.sort((x, y) => y.weeklyVolume - x.weeklyVolume);
+  return result.sort(
+    (x, y) =>
+      y.weeklySets - x.weeklySets ||
+      y.weeklyWeightVolume - x.weeklyWeightVolume,
+  );
 };
 
 // 방치 부위: 최근 28일 한 번도 안 했거나(daysSinceLast null) 10일 이상 공백.

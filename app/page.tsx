@@ -43,6 +43,7 @@ import {
   weightedBodyLoad,
   type BodyweightEntry,
 } from "./lib/trainingLoad";
+import type { LiftTrend } from "./lib/progressTrend";
 
 type SortableRenderProps = {
   setNodeRef: (node: HTMLElement | null) => void;
@@ -522,24 +523,24 @@ type FavoriteExercise = {
 
 type TrainingReport = {
   headline: string;
+  verdict: string;
   overall: string;
   frequencyComment: string;
-  // 신규 섹션 — 구(舊) 캐시엔 없으므로 optional(렌더 시 null-guard).
-  balanceSummary?: string;
-  upperBody?: string;
-  lowerBody?: string;
-  efficiencyVerdict?: string;
-  exerciseSelection?: Array<{
+  bodyweightNote: string;
+  coreNote: string;
+  upper: {
+    diagnosis: string;
+    prescription: string;
+  };
+  lower: {
+    diagnosis: string;
+    prescription: string;
+  };
+  efficiencyVerdict: string;
+  exerciseSelection: Array<{
     name: string;
     verdict: "keep" | "swap" | "drop";
     reason: string;
-  }>;
-  neglectNote?: string;
-  bodyweightNote?: string;
-  liftAnalysis: Array<{
-    name: string;
-    trend: "up" | "flat" | "down" | "new";
-    comment: string;
   }>;
   actionItems: string[];
   warning: string;
@@ -551,6 +552,7 @@ type TrainingStats = {
   sessionsLast28Days: number;
   trackingDays: number;
   perWeekRecent: number;
+  liftTrends: LiftTrend[];
 };
 
 type TrainingReportCache = {
@@ -559,17 +561,14 @@ type TrainingReportCache = {
   stats: TrainingStats;
 };
 
-const REPORT_CACHE_KEY = "first-rep-training-report";
+const REPORT_CACHE_KEY = "first-rep-training-report-v2";
 
-const trendSymbol: Record<
-  TrainingReport["liftAnalysis"][number]["trend"],
-  string
-> = { up: "↑", flat: "→", down: "↓", new: "＋" };
-
-const trendLabel: Record<
-  TrainingReport["liftAnalysis"][number]["trend"],
-  string
-> = { up: "상승", flat: "정체", down: "하락", new: "신규" };
+const trendLabel: Record<LiftTrend["verdict"], string> = {
+  growing: "성장",
+  stalled: "정체",
+  declining: "하락",
+  idle: "공백",
+};
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 const subscribeToHydration = () => () => undefined;
@@ -580,6 +579,13 @@ const sessionDateKey = (date: string) => toDateKey(new Date(date));
 const dateFromKey = (key: string) => new Date(`${key}T12:00:00`);
 const formatNumber = (value: number) =>
   new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 1 }).format(value);
+const formatTrendChange = (changePct: number) => {
+  const value = formatNumber(Math.abs(changePct));
+  if (changePct > 0) return `${value}% 증가`;
+  if (changePct < 0) return `${value}% 감소`;
+  return "변화 없음";
+};
+const formatTrendNote = (note: string) => note.replaceAll("\u2192", "에서 ");
 const formatSelectedDate = (key: string) =>
   new Intl.DateTimeFormat("ko-KR", {
     month: "long",
@@ -1422,6 +1428,21 @@ export default function Home() {
     [history, todayKey],
   );
 
+  const upperLiftTrends = useMemo(
+    () =>
+      (reportStats?.liftTrends ?? []).filter(
+        (trend) => trend.region === "upper",
+      ),
+    [reportStats],
+  );
+  const lowerLiftTrends = useMemo(
+    () =>
+      (reportStats?.liftTrends ?? []).filter(
+        (trend) => trend.region === "lower",
+      ),
+    [reportStats],
+  );
+
   const detailPoints = useMemo(
     () =>
       detailTarget
@@ -1866,15 +1887,15 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="report-panel" aria-label="AI 근력 분석">
-        <div className="report-head">
+      <section className="coach-panel" aria-label="AI 코치 훈련 분석">
+        <div className="coach-head">
           <div>
-            <span>STRENGTH REPORT</span>
+            <span>AI COACH</span>
             <h2>{report ? report.headline : "근력·근육량 관점의 훈련 진단"}</h2>
             {reportDate && report && <small>{reportDate} 기준 분석</small>}
           </div>
           <button
-            className="report-run"
+            className="coach-run"
             onClick={runReport}
             disabled={reportStatus === "loading"}
           >
@@ -1888,126 +1909,145 @@ export default function Home() {
 
         <BodyLoadMap stats={bodyPartStats} />
 
+        {report && <p className="coach-verdict">{report.verdict}</p>}
+
         {reportStatus === "error" && (
-          <p className="report-error" role="alert">
+          <p className="coach-error" role="alert">
             {reportError}
           </p>
         )}
 
         {!report && reportStatus !== "error" && (
-          <p className="report-empty">
+          <p className="coach-empty">
             기록 전체를 읽고 훈련 빈도·강도·종목별 세션 부하 추이를 분석해 지금
             잘 가고 있는지 판정합니다.
           </p>
         )}
 
         {report && (
-          <div className="report-body">
-            <p className="report-overall">{report.overall}</p>
+          <div className="coach-body">
+            <section className="coach-block coach-overview">
+              <div className="coach-block-head">
+                <span>SUMMARY</span>
+                <h3>요약</h3>
+              </div>
+              <p className="coach-overall">{report.overall}</p>
 
-            {report.balanceSummary && (
-              <div className="report-section">
-                <span>부위 밸런스</span>
-                <p>{report.balanceSummary}</p>
+              <div className="coach-facts">
+                <div>
+                  <span>훈련 빈도</span>
+                  <b>
+                    주 {reportStats ? formatNumber(reportStats.perWeekRecent) : "-"}회
+                  </b>
+                  {reportStats && reportStats.trackingDays < 14 && (
+                    <small>첫 주 페이스</small>
+                  )}
+                  <p>{report.frequencyComment}</p>
+                </div>
+                <div>
+                  <span>체중과 볼륨</span>
+                  <p>{report.bodyweightNote}</p>
+                </div>
+                <div>
+                  <span>코어</span>
+                  <p>{report.coreNote}</p>
+                </div>
               </div>
-            )}
-            {report.upperBody && (
-              <div className="report-section">
-                <span>상체 진단</span>
-                <p>{report.upperBody}</p>
-              </div>
-            )}
-            {report.lowerBody && (
-              <div className="report-section">
-                <span>하체 진단</span>
-                <p>{report.lowerBody}</p>
-              </div>
-            )}
-            {report.neglectNote && (
-              <div className="report-section report-section-warn">
-                <span>방치 부위</span>
-                <p>{report.neglectNote}</p>
-              </div>
-            )}
-            {(report.efficiencyVerdict ||
-              (report.exerciseSelection?.length ?? 0) > 0) && (
-              <div className="report-picks">
-                <span>운동 선택</span>
-                {report.efficiencyVerdict && (
-                  <p>{report.efficiencyVerdict}</p>
-                )}
-                {report.exerciseSelection?.map((pick, pickIndex) => (
-                  <div
-                    className="report-pick"
-                    key={`${pick.name}-${pickIndex}`}
-                  >
-                    <span className={`pick-${pick.verdict}`}>
-                      {pick.verdict === "keep"
-                        ? "유지"
-                        : pick.verdict === "swap"
-                          ? "교체"
-                          : "제외"}
-                    </span>
-                    <div>
-                      <b>{pick.name}</b>
-                      <p>{pick.reason}</p>
-                    </div>
+
+              {report.actionItems.length > 0 && (
+                <div className="coach-actions">
+                  <span>이번 주 할 일</span>
+                  <ol>
+                    {report.actionItems.map((item, itemIndex) => (
+                      <li key={`${item}-${itemIndex}`}>{item}</li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              {report.warning && (
+                <small className="coach-warning">{report.warning}</small>
+              )}
+            </section>
+
+            {[
+              {
+                key: "upper",
+                title: "상체",
+                content: report.upper,
+                trends: upperLiftTrends,
+              },
+              {
+                key: "lower",
+                title: "하체",
+                content: report.lower,
+                trends: lowerLiftTrends,
+              },
+            ].map((section) => (
+              <section className="coach-block coach-region" key={section.key}>
+                <div className="coach-block-head">
+                  <span>{section.key === "upper" ? "UPPER BODY" : "LOWER BODY"}</span>
+                  <h3>{section.title}</h3>
+                </div>
+                <p className="coach-diagnosis">{section.content.diagnosis}</p>
+
+                {section.trends.length > 0 ? (
+                  <div className="coach-trends">
+                    {section.trends.map((lift) => (
+                      <div className="coach-trend" key={`${section.key}-${lift.name}`}>
+                        <span className={`coach-trend-badge trend-${lift.verdict}`}>
+                          {trendLabel[lift.verdict]}
+                        </span>
+                        <div>
+                          <b>{lift.name}</b>
+                          <p>{formatTrendNote(lift.note)}</p>
+                        </div>
+                        <small>
+                          <span>{formatTrendChange(lift.changePct)}</span>
+                          <span>{lift.sessions}세션</span>
+                        </small>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            )}
-            {report.bodyweightNote && (
-              <div className="report-section">
-                <span>체중·볼륨 추세</span>
-                <p>{report.bodyweightNote}</p>
-              </div>
-            )}
-
-            <div className="report-frequency">
-              <b>
-                주 {reportStats ? formatNumber(reportStats.perWeekRecent) : "-"}
-                회
-                {reportStats && reportStats.trackingDays < 14 && (
-                  <em className="report-frequency-tag">첫 주 페이스</em>
+                ) : (
+                  <p className="coach-trend-empty">
+                    추세를 판정할 기록이 아직 충분하지 않습니다.
+                  </p>
                 )}
-              </b>
-              <p>{report.frequencyComment}</p>
-            </div>
 
-            {report.liftAnalysis.length > 0 && (
-              <div className="report-lifts">
-                {report.liftAnalysis.map((lift, liftIndex) => (
-                  <div
-                    className={`report-lift trend-${lift.trend}`}
-                    key={`${lift.name}-${liftIndex}`}
-                  >
-                    <i aria-hidden="true">{trendSymbol[lift.trend]}</i>
-                    <div>
-                      <b>
-                        {lift.name}
-                        <small>{trendLabel[lift.trend]}</small>
-                      </b>
-                      <p>{lift.comment}</p>
-                    </div>
-                  </div>
-                ))}
+                <div className="coach-prescription">
+                  <span>다음 7일</span>
+                  <p>{section.content.prescription}</p>
+                </div>
+              </section>
+            ))}
+
+            <section className="coach-block coach-exercises">
+              <div className="coach-block-head">
+                <span>EXERCISES</span>
+                <h3>종목 정리</h3>
               </div>
-            )}
-
-            {report.actionItems.length > 0 && (
-              <div className="report-actions">
-                <span>NEXT 7 DAYS</span>
-                <ol>
-                  {report.actionItems.map((item, itemIndex) => (
-                    <li key={`${item}-${itemIndex}`}>{item}</li>
+              <p className="coach-efficiency">{report.efficiencyVerdict}</p>
+              {report.exerciseSelection.length > 0 && (
+                <div className="coach-picks">
+                  {report.exerciseSelection.map((pick, pickIndex) => (
+                    <div className="coach-pick" key={`${pick.name}-${pickIndex}`}>
+                      <span className={`pick-${pick.verdict}`}>
+                        {pick.verdict === "keep"
+                          ? "유지"
+                          : pick.verdict === "swap"
+                            ? "교체"
+                            : "제외"}
+                      </span>
+                      <div>
+                        <b>{pick.name}</b>
+                        <p>{pick.reason}</p>
+                      </div>
+                    </div>
                   ))}
-                </ol>
-              </div>
-            )}
-
-            {report.warning && (
-              <small className="report-warning">{report.warning}</small>
-            )}
+                </div>
+              )}
+            </section>
           </div>
         )}
       </section>
