@@ -1,4 +1,4 @@
-import { inferBodyPart, type BodyPart } from "./bodyPart";
+import { resolveBodyPart, type BodyPart } from "./bodyPart";
 import type { StatSession } from "./bodyPartStats";
 import { canonicalNameMap, normalizeExerciseName } from "./exerciseName";
 import {
@@ -138,7 +138,7 @@ export const computeLiftTrends = (
       const byDate = lifts.get(key) ?? new Map<string, LiftDay>();
       const existing = byDate.get(session.date);
       const region = regionOf(
-        exercise.bodyPart ?? inferBodyPart(name),
+        resolveBodyPart(name, exercise.bodyPart, exercise.bodyPartManual),
       );
 
       if (kind === "reps") {
@@ -287,7 +287,7 @@ export const computeRegionTrends = (
       if (exercise.metric === "distance") continue;
       const name = String(exercise.name ?? "");
       const region = regionOf(
-        exercise.bodyPart ?? inferBodyPart(name),
+        resolveBodyPart(name, exercise.bodyPart, exercise.bodyPartManual),
       );
       if (region === "other") continue;
       const validSets = (exercise.sets ?? []).filter(

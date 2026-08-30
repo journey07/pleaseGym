@@ -28,7 +28,12 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import BodyLoadMap from "./BodyLoadMap";
-import { BodyPart, BODY_PARTS, inferBodyPart } from "./lib/bodyPart";
+import {
+  BodyPart,
+  BODY_PARTS,
+  inferBodyPart,
+  resolveBodyPart,
+} from "./lib/bodyPart";
 import { computeBodyPartStats } from "./lib/bodyPartStats";
 import {
   canonicalNameMap,
@@ -238,7 +243,8 @@ function TrendChart({
           r={13}
           tabIndex={0}
           role="button"
-          aria-label={`${shortDateLabel(point.date)} ${mode.label} ${formatNumber(
+          aria-label={`${shortDateLabel(point.date)} ${mode.label} ${formatModeValue(
+            mode,
             mode.value(point),
           )}${mode.unit}`}
           onClick={() => setActive(index === active ? null : index)}
@@ -254,7 +260,8 @@ function TrendChart({
           x={x(active)}
           y={y(points[active])}
           width={width}
-          text={`${shortDateLabel(points[active].date)}  ${formatNumber(
+          text={`${shortDateLabel(points[active].date)}  ${formatModeValue(
+            mode,
             mode.value(points[active]),
           )}${mode.unit}`}
           detail={points[active].summary}
@@ -313,11 +320,14 @@ function ExerciseDetail({
 
   // 추가중량을 실제로 단 기록이 있는 종목인지. 기본 탭을 고르는 데 쓴다.
   const hasAddedLoad = points.some((point) => point.addedWeight > 0);
+  // 시간을 적어둔 달리기 기록이 하나라도 있어야 시간·페이스 탭이 의미가 있다.
+  const hasDuration = points.some((point) => point.durationSec > 0);
   const { modes, defaultKey } = trendModes(
     metric,
     assisted,
     hasBodyweight,
     hasAddedLoad,
+    hasDuration,
   );
   const [modeKey, setModeKey] = useState(defaultKey);
   const mode =
@@ -373,7 +383,7 @@ function ExerciseDetail({
               <div>
                 <small>BEST</small>
                 <strong>
-                  {formatNumber(best)}
+                  {formatModeValue(mode, best)}
                   <em>{mode.unit}</em>
                 </strong>
                 <span>
@@ -387,7 +397,7 @@ function ExerciseDetail({
               <div>
                 <small>최근</small>
                 <strong>
-                  {formatNumber(last ? mode.value(last) : 0)}
+                  {formatModeValue(mode, last ? mode.value(last) : 0)}
                   <em>{mode.unit}</em>
                 </strong>
                 <span>{last ? shortDateLabel(last.date) : "-"}</span>
@@ -396,7 +406,7 @@ function ExerciseDetail({
                 <small>첫 기록 대비</small>
                 <strong className={delta === 0 ? "" : improved ? "up" : "down"}>
                   {delta > 0 ? "+" : ""}
-                  {formatNumber(delta)}
+                  {formatModeValue(mode, delta)}
                   <em>{mode.unit}</em>
                 </strong>
                 <span>{points.length}회 기록</span>
@@ -406,9 +416,24 @@ function ExerciseDetail({
                 <strong>{totalSets}</strong>
                 <span>
                   {metric === "distance"
-                    ? `${formatNumber(
-                        points.reduce((sum, point) => sum + point.distanceKm, 0),
-                      )}km 누적`
+                    ? [
+                        `${formatNumber(
+                          points.reduce(
+                            (sum, point) => sum + point.distanceKm,
+                            0,
+                          ),
+                        )}km`,
+                        hasDuration
+                          ? formatDuration(
+                              points.reduce(
+                                (sum, point) => sum + point.durationSec,
+                                0,
+                              ),
+                            )
+                          : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") + " 누적"
                     : `${formatNumber(
                         points.reduce((sum, point) => sum + point.volume, 0),
                       )}kg 볼륨`}
@@ -442,7 +467,7 @@ function ExerciseDetail({
                     <b>{shortDateLabel(point.date)}</b>
                     <span>{point.summary}</span>
                     <strong>
-                      {formatNumber(mode.value(point))}
+                      {formatModeValue(mode, mode.value(point))}
                       {mode.unit}
                     </strong>
                   </button>
@@ -462,6 +487,8 @@ type WorkoutSet = {
   reps: number;
   done: boolean;
   distanceKm?: number;
+  // 거리 종목의 소요 시간(초). 거리만으론 페이스를 알 수 없어서 같이 받는다.
+  durationSec?: number;
   inheritWeight?: boolean;
   inheritReps?: boolean;
 };
@@ -484,14 +511,16 @@ type BodyGroup = "upper" | "lower" | "cardio" | "neutral";
 // 달력 색 구분: 상체(빨강)/하체(파랑)/유산소(보라)/중립(회색).
 const bodyGroup = (exercise: Exercise): BodyGroup => {
   if (exercise.metric === "distance") return "cardio";
-  const part = exercise.bodyPart ?? inferBodyPart(exercise.name);
+  const part = exerciseBodyPart(exercise);
   if (part === "허벅지" || part === "종아리") return "lower";
   if (part === "기타") return "neutral";
   return "upper"; // 가슴·등·어깨·팔·복근·허리
 };
 
+// 칩으로 직접 고친 부위만 그대로 쓰고, 자동 분류는 매번 이름에서 다시 추론한다.
+// 예전 기록에 "기타"로 굳어 있던 종목도 규칙이 좋아지면 함께 고쳐진다.
 const exerciseBodyPart = (exercise: Exercise): BodyPart =>
-  exercise.bodyPart ?? inferBodyPart(exercise.name);
+  resolveBodyPart(exercise.name, exercise.bodyPart, exercise.bodyPartManual);
 
 // 어시스티드(보조) 종목 여부. 감지 규칙은 리포트와 공유한다(lib/trainingLoad).
 const isAssistedExercise = (exercise: Exercise): boolean =>
@@ -579,6 +608,29 @@ const sessionDateKey = (date: string) => toDateKey(new Date(date));
 const dateFromKey = (key: string) => new Date(`${key}T12:00:00`);
 const formatNumber = (value: number) =>
   new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 1 }).format(value);
+// 달린 시간은 mm:ss(1시간 넘으면 h:mm:ss)로 읽는다. 음수는 첫 기록 대비 증감용.
+const formatDuration = (seconds: number) => {
+  const total = Math.round(Math.abs(seconds));
+  const sign = seconds < 0 ? "-" : "";
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  return hours > 0
+    ? `${sign}${hours}:${pad(minutes)}:${pad(rest)}`
+    : `${sign}${minutes}:${pad(rest)}`;
+};
+
+// 페이스는 러너가 읽는 5'29" 꼴로.
+const formatPace = (secondsPerKm: number) => {
+  const total = Math.round(Math.abs(secondsPerKm));
+  const sign = secondsPerKm < 0 ? "-" : "";
+  return `${sign}${Math.floor(total / 60)}'${pad(total % 60)}"`;
+};
+
+// 거리·시간이 둘 다 있어야 페이스가 나온다. 없으면 0(= 표시 안 함).
+const paceOf = (distanceKm: number, durationSec: number) =>
+  distanceKm > 0 && durationSec > 0 ? durationSec / distanceKm : 0;
+
 const formatTrendChange = (changePct: number) => {
   const value = formatNumber(Math.abs(changePct));
   if (changePct > 0) return `${value}% 증가`;
@@ -724,6 +776,7 @@ const blankDistance = (): WorkoutSet => ({
   reps: 1,
   done: true,
   distanceKm: 0,
+  durationSec: 0,
 });
 const createDefaultWeightSets = (): WorkoutSet[] =>
   Array.from({ length: 4 }, (_, index) => ({
@@ -751,14 +804,18 @@ const createExerciseFromLog = (
   name,
   metric,
   assisted: previous.assisted,
-  bodyPart: previous.bodyPart ?? inferBodyPart(name),
+  bodyPart: previous.bodyPartManual
+    ? (previous.bodyPart ?? inferBodyPart(name))
+    : inferBodyPart(name),
   bodyPartManual: previous.bodyPartManual ?? false,
   sets: previous.sets.map((set, index, all) => ({
     id: uid(),
     weight: set.weight,
     reps: set.reps,
     done: true,
-    ...(metric === "distance" ? { distanceKm: set.distanceKm ?? 0 } : {}),
+    ...(metric === "distance"
+      ? { distanceKm: set.distanceKm ?? 0, durationSec: set.durationSec ?? 0 }
+      : {}),
     inheritWeight: index > 0 && set.weight === all[index - 1].weight,
     inheritReps: index > 0 && set.reps === all[index - 1].reps,
   })),
@@ -802,6 +859,8 @@ type TrendPoint = {
   totalReps: number;
   volume: number;
   distanceKm: number;
+  durationSec: number;
+  paceSecPerKm: number;
   minAssist: number | null;
   addedWeight: number; // 맨몸 종목에 달았던 추가중량(그날 최대). 안 달았으면 0.
 
@@ -849,6 +908,14 @@ const buildExerciseTrend = (
                 : weightedBodyLoad(bodyweight, set.weight),
               reps: set.reps,
             }));
+      const distanceKm = sets.reduce(
+        (sum, set) => sum + (set.distanceKm ?? 0),
+        0,
+      );
+      const durationSec = sets.reduce(
+        (sum, set) => sum + (set.durationSec ?? 0),
+        0,
+      );
       points.push({
         date: dateKey,
         sets: sets.length,
@@ -861,16 +928,21 @@ const buildExerciseTrend = (
         topReps: sets.reduce((value, set) => Math.max(value, set.reps), 0),
         totalReps: sets.reduce((sum, set) => sum + set.reps, 0),
         volume: loadSets.reduce((sum, set) => sum + set.weight * set.reps, 0),
-        distanceKm: sets.reduce((sum, set) => sum + (set.distanceKm ?? 0), 0),
+        distanceKm,
+        durationSec,
+        paceSecPerKm: paceOf(distanceKm, durationSec),
         minAssist: assisted ? assist : null,
         addedWeight: weightedBody
           ? sets.reduce((value, set) => Math.max(value, set.weight), 0)
           : 0,
         summary:
           metric === "distance"
-            ? `${formatNumber(
-                sets.reduce((sum, set) => sum + (set.distanceKm ?? 0), 0),
-              )}km`
+            ? [
+                `${formatNumber(distanceKm)}km`,
+                durationSec > 0 ? formatDuration(durationSec) : "",
+              ]
+                .filter(Boolean)
+                .join(" · ")
             : sets
                 .map((set) =>
                   set.weight > 0
@@ -895,7 +967,14 @@ type TrendMode = {
   showTopWeight?: boolean;
   note: string;
   value: (point: TrendPoint) => number;
+  // 시간·페이스처럼 숫자로 읽으면 안 되는 지표의 표기. 없으면 숫자 그대로.
+  // 첫 기록 대비 증감에도 그대로 쓰이므로 음수까지 처리해야 한다.
+  format?: (value: number) => string;
 };
+
+// 지표 값 한 개를 화면에 쓸 문자열로. 단위는 붙이지 않는다(자리마다 따로 그림).
+const formatModeValue = (mode: TrendMode, value: number) =>
+  mode.format ? mode.format(value) : formatNumber(value);
 
 const assistMode: TrendMode = {
   key: "assist",
@@ -932,11 +1011,13 @@ type TrendModeSet = { modes: TrendMode[]; defaultKey: string };
 // hasBodyweight: 그 종목 기록 시점의 체중을 알 수 있는지. 맨몸 계열은 체중이 있어야
 // 유효 부하로 환산할 수 있고, 없으면 원래 지표(보조 중량·반복)만 보여준다.
 // hasAddedLoad: 맨몸 종목에 추가중량을 단 기록이 있는지.
+// hasDuration: 거리 종목에 소요 시간을 적어둔 기록이 있는지(시간·페이스 탭 조건).
 const trendModes = (
   metric: Metric,
   assisted: boolean,
   hasBodyweight: boolean,
   hasAddedLoad: boolean,
+  hasDuration: boolean,
 ): TrendModeSet => {
   if (metric === "distance")
     return {
@@ -949,6 +1030,29 @@ const trendModes = (
           note: "그날 기록한 거리 합계.",
           value: (point) => point.distanceKm,
         },
+        // 시간을 안 적은 기록만 있으면 전부 0이라 탭을 띄워도 볼 게 없다.
+        ...(hasDuration
+          ? [
+              {
+                key: "duration",
+                label: "시간",
+                unit: "",
+                lowerIsBetter: false,
+                note: "그날 달린 시간 합계. 같은 페이스라면 오래 뛸수록 올라갑니다.",
+                value: (point: TrendPoint) => point.durationSec,
+                format: formatDuration,
+              },
+              {
+                key: "pace",
+                label: "페이스",
+                unit: "/km",
+                lowerIsBetter: true,
+                note: "1km를 뛰는 데 걸린 시간(시간 ÷ 거리). 짧을수록 빠른 거라 그래프는 페이스가 빨라질수록 선이 위로 가도록 뒤집어 그립니다.",
+                value: (point: TrendPoint) => point.paceSecPerKm,
+                format: formatPace,
+              },
+            ]
+          : []),
       ],
       defaultKey: "distance",
     };
@@ -1417,6 +1521,10 @@ export default function Home() {
       reps: bodyweightSets.reduce((sum, set) => sum + set.reps, 0),
       distance: distanceSets.reduce(
         (sum, set) => sum + (set.distanceKm ?? 0),
+        0,
+      ),
+      duration: distanceSets.reduce(
+        (sum, set) => sum + (set.durationSec ?? 0),
         0,
       ),
     };
@@ -2099,9 +2207,17 @@ export default function Home() {
                     const assistMin = isAssistedExercise(exercise)
                       ? minAssistWeight(exercise)
                       : null;
+                    const runDuration = isDistance
+                      ? sets.reduce(
+                          (sum, set) => sum + (set.durationSec ?? 0),
+                          0,
+                        )
+                      : 0;
                     return {
                       id: exercise.id,
                       name: exercise.name,
+                      // 달리기는 거리 밑에 시간을 한 줄 더 붙인다(시간을 적은 날만).
+                      sub: runDuration > 0 ? formatDuration(runDuration) : "",
                       value: isDistance
                         ? sets.reduce(
                             (sum, set) => sum + (set.distanceKm ?? 0),
@@ -2132,7 +2248,9 @@ export default function Home() {
               const spokenRecords = dayRecords
                 .map(
                   (record) =>
-                    `${record.name} ${formatNumber(record.value)}${record.unit}`,
+                    `${record.name} ${formatNumber(record.value)}${record.unit}${
+                      record.sub ? ` ${record.sub}` : ""
+                    }`,
                 )
                 .join(", ");
               return (
@@ -2158,6 +2276,7 @@ export default function Home() {
                           <strong>
                             {formatNumber(record.value)}
                             <small>{record.unit}</small>
+                            {record.sub && <i>{record.sub}</i>}
                           </strong>
                         </span>
                       ))}
@@ -2209,6 +2328,11 @@ export default function Home() {
                       (sum, set) => sum + (set.distanceKm ?? 0),
                       0,
                     );
+                    const durationSec = exercise.sets.reduce(
+                      (sum, set) => sum + (set.durationSec ?? 0),
+                      0,
+                    );
+                    const pace = paceOf(distance, durationSec);
                     return (
                       <SortableExercise id={exercise.id} key={exercise.id}>
                         {({ setNodeRef, style, handleProps, isDragging }) => (
@@ -2239,7 +2363,14 @@ export default function Home() {
                               />
                               <small>
                                 {isDistance
-                                  ? `${formatNumber(distance)}km`
+                                  ? [
+                                      `${formatNumber(distance)}km`,
+                                      durationSec > 0
+                                        ? formatDuration(durationSec)
+                                        : "",
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · ")
                                   : assistedMin !== null
                                     ? `보조 ${formatNumber(assistedMin)}kg`
                                     : isBodyweight
@@ -2340,6 +2471,64 @@ export default function Home() {
                                   aria-label={`${exercise.name} 거리`}
                                 />
                                 <b>km</b>
+                                <span>TIME</span>
+                                {/* 분·초를 따로 받아 durationSec 하나로 합친다. */}
+                                <div className="time-field">
+                                  <NumberInput
+                                    min="0"
+                                    step="1"
+                                    inputMode="numeric"
+                                    placeholder="0"
+                                    value={Math.floor(durationSec / 60)}
+                                    onValueChange={(minutes) =>
+                                      updateSet(
+                                        exercise.id,
+                                        exercise.sets[0].id,
+                                        {
+                                          durationSec:
+                                            Math.max(0, Math.round(minutes)) *
+                                              60 +
+                                            (durationSec % 60),
+                                        },
+                                      )
+                                    }
+                                    aria-label={`${exercise.name} 시간(분)`}
+                                  />
+                                  <i>:</i>
+                                  <NumberInput
+                                    min="0"
+                                    max="59"
+                                    step="1"
+                                    inputMode="numeric"
+                                    placeholder="0"
+                                    value={durationSec % 60}
+                                    onValueChange={(seconds) =>
+                                      updateSet(
+                                        exercise.id,
+                                        exercise.sets[0].id,
+                                        {
+                                          durationSec:
+                                            Math.floor(durationSec / 60) * 60 +
+                                            Math.min(
+                                              59,
+                                              Math.max(0, Math.round(seconds)),
+                                            ),
+                                        },
+                                      )
+                                    }
+                                    aria-label={`${exercise.name} 시간(초)`}
+                                  />
+                                </div>
+                                <b>분초</b>
+                                {pace > 0 && (
+                                  <>
+                                    <span>PACE</span>
+                                    <strong className="pace-value">
+                                      {formatPace(pace)}
+                                    </strong>
+                                    <b>/km</b>
+                                  </>
+                                )}
                               </div>
                             ) : (
                               <>
@@ -2535,6 +2724,17 @@ export default function Home() {
             )}
             {draftStats.distance > 0 && (
               <span>{formatNumber(draftStats.distance)}km</span>
+            )}
+            {draftStats.duration > 0 && (
+              <span>{formatDuration(draftStats.duration)}</span>
+            )}
+            {paceOf(draftStats.distance, draftStats.duration) > 0 && (
+              <span>
+                {formatPace(
+                  paceOf(draftStats.distance, draftStats.duration),
+                )}
+                /km
+              </span>
             )}
           </div>
 

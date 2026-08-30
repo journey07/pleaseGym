@@ -237,6 +237,8 @@ button { color: inherit; }
 .day-lift b { overflow: hidden; text-overflow: ellipsis; color: #343431; font-size: 11px; font-weight: 720; white-space: nowrap; }
 .day-lift strong { flex: 0 0 auto; color: #191917; font: 750 12px/1 var(--font-geist-mono), monospace; letter-spacing: -.03em; }
 .day-lift strong small { margin-left: 2px; font-size: 7px; font-weight: 700; letter-spacing: 0; }
+/* 달리기 시간처럼 값 아래 한 줄 더 붙는 보조 표기 */
+.day-lift strong i { display: block; margin-top: 2px; color: #6f6f68; font: 700 9px/1 var(--font-geist-mono), monospace; font-style: normal; text-align: right; letter-spacing: -.02em; }
 /* 상체=빨강 / 하체=파랑 / 유산소=연두 / 중립=회색 (왼쪽 보더 색으로 구분) */
 .day-lift.upper { border-left-color: var(--accent); }
 .day-lift.lower { border-left-color: #2f6bd8; }
@@ -286,6 +288,14 @@ button { color: inherit; }
 .distance-entry input { width: 100%; padding: 12px; color: #050505; background: var(--paper); border: 1px solid transparent; outline: 0; text-align: right; font: 800 18px/1 var(--font-geist-mono), monospace; }
 .distance-entry input:focus { background: white; border-color: var(--ink); }
 .distance-entry b { font: 750 11px/1 var(--font-geist-mono), monospace; }
+.distance-entry > span { align-self: center; }
+/* 달린 시간: 분 : 초 두 칸을 한 필드처럼 붙여 놓는다. */
+.time-field { display: grid; grid-template-columns: 1fr 8px 1fr; align-items: center; background: var(--paper); }
+.time-field input { padding-inline: 4px; background: transparent; text-align: center; }
+.time-field input::-webkit-outer-spin-button, .time-field input::-webkit-inner-spin-button { appearance: none; margin: 0; }
+.time-field i { color: #85857e; font: 800 15px/1 var(--font-geist-mono), monospace; font-style: normal; text-align: center; }
+/* 페이스는 거리·시간에서 계산된 값이라 입력이 아니라 표시만 한다. */
+.pace-value { padding: 12px; color: #050505; text-align: right; font: 800 18px/1 var(--font-geist-mono), monospace; }
 .add-set-button { margin: 11px 0 0 32px; padding: 0; color: var(--muted); background: transparent; border: 0; font-size: 10px; cursor: pointer; }
 .add-set-button:hover { color: var(--ink); }
 .empty-editor { min-height: 225px; display: grid; place-items: center; align-content: center; padding: 35px; text-align: center; border-bottom: 1px solid var(--line); }

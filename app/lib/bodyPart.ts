@@ -95,6 +95,20 @@ export const BODY_PART_KEYWORDS: { part: BodyPart; keywords: string[] }[] = [
       "앱덕션",
       "내전",
       "외전",
+      // 둔근·힙힌지 계열. 힙 쓰러스트/글루트 브릿지가 "기타"로 빠지면
+      // 달력에서 회색으로 칠해지고 하체 볼륨 집계에서도 통째로 누락된다.
+      "힙",
+      "hip",
+      "둔근",
+      "엉덩이",
+      "글루트",
+      "glute",
+      "쓰러스트",
+      "스러스트",
+      "thrust",
+      "브릿지",
+      "브리지",
+      "bridge",
       "squat",
       "lunge",
       "leg press",
@@ -202,3 +216,15 @@ export const inferBodyPart = (name: string): BodyPart => {
   }
   return "기타";
 };
+
+/**
+ * 화면·집계에서 쓸 실제 부위.
+ * 사용자가 칩으로 직접 고른 값(bodyPartManual)만 그대로 믿고, 그 외에는
+ * 저장된 값을 무시하고 이름에서 다시 추론한다. 자동 추론 규칙이 좋아졌을 때
+ * 예전에 저장된 잘못된 부위(예: 힙 쓰러스트 → 기타)가 그대로 굳지 않게 한다.
+ */
+export const resolveBodyPart = (
+  name: string,
+  stored?: BodyPart,
+  manual?: boolean,
+): BodyPart => (manual && stored ? stored : inferBodyPart(name));

@@ -8,7 +8,7 @@ import {
   type BodyPartStat,
   type StatSession,
 } from "@/app/lib/bodyPartStats";
-import { inferBodyPart, type BodyPart } from "@/app/lib/bodyPart";
+import { resolveBodyPart, type BodyPart } from "@/app/lib/bodyPart";
 import {
   addLoad,
   assistedLoad,
@@ -41,13 +41,15 @@ type PostedSet = {
   reps?: number;
   done?: boolean;
   distanceKm?: number;
+  durationSec?: number;
 };
 
 type PostedExercise = {
   name?: string;
   metric?: string;
   assisted?: boolean;
-  bodyPart?: BodyPart; // 수동 교정 우선 (I3)
+  bodyPart?: BodyPart; // 수동 교정(bodyPartManual)일 때만 신뢰 (I3)
+  bodyPartManual?: boolean;
   sets?: PostedSet[];
 };
 
@@ -83,7 +85,13 @@ type LiftSeries = {
 type DistanceSeries = {
   name: string;
   sessions: number;
-  points: Array<{ date: string; km: number }>;
+  // min·paceMinPerKm은 시간을 적어둔 날만 붙는다(안 적은 날은 거리만).
+  points: Array<{
+    date: string;
+    km: number;
+    min?: number;
+    paceMinPerKm?: number;
+  }>;
 };
 
 type RegionStat = {
@@ -236,6 +244,7 @@ const systemPrompt = `당신은 EVERYONE BUT YOU의 불꽃 스파르타 스트�
 - stats.liftTrends: 서버가 판정한 종목별 추세 { name, region, verdict(growing/stalled/declining/idle), changePct, from, to, unit, sessions, daysSinceLast, note }. 성장·정체·하락·공백 판정의 유일한 기준이다.
 - stats.regionTrends: 서버가 판정한 상체·하체·코어 주간 세트 추세 { region, setsThisWeek, setsPrevWeek, changePct, verdict(up/flat/down) }.
 - sessionLoad(kg): 그날 전 세트의 중량+볼륨을 합친 대표 지표 = 볼륨가중 평균중량 × (1 + 총반복/30). 세트를 늘려도 무게를 올려도 오른다. 앱 그래프의 기본 선이고 실측 1RM이 아니다. e1rm은 그날 최고 세트 하나의 환산값이라 볼륨을 반영하지 않는다 → 성장 판단은 sessionLoad를 주로, 최대 강도만 볼 땐 e1rm을 본다. 두 값이 엇갈리면(sessionLoad↑ e1rm→) 볼륨은 늘었는데 강도가 정체라는 뜻.
+- stats.cardio[]: 거리 종목 시계열 { name, sessions, points[{ date, km, min(달린 시간·분), paceMinPerKm(1km당 분) }] }. min·paceMinPerKm은 시간을 기록한 날만 있다. 페이스는 낮을수록 빠른 것이고, 거리·시간이 함께 늘었는데 페이스가 그대로면 지구력이 붙은 것으로 읽는다. 없는 날의 시간을 지어내지 마라.
 - stats.perWeekRecent/trackingDays: 빈도. bodyweight: { latest, deltaVs4wk(4주 전 대비 증감kg, null=비교불가), points } 또는 null.
 
 출력 필드(반드시 부위 단위가 1차, 종목은 보조):
@@ -314,7 +323,10 @@ function buildStats(
 
   const liftMap = new Map<string, Map<string, LiftPoint>>();
   const bwMap = new Map<string, Map<string, LiftPoint>>();
-  const cardioMap = new Map<string, Map<string, number>>();
+  const cardioMap = new Map<
+    string,
+    Map<string, { km: number; sec: number }>
+  >();
 
   for (const session of sessions) {
     for (const exercise of session.exercises) {
@@ -333,10 +345,19 @@ function buildStats(
           (sum, set) => sum + (Number(set.distanceKm) || 0),
           0,
         );
+        const sec = doneSets.reduce(
+          (sum, set) => sum + (Number(set.durationSec) || 0),
+          0,
+        );
         if (km <= 0) continue;
         const byDate =
-          cardioMap.get(normalizedName) ?? new Map<string, number>();
-        byDate.set(session.date, round1((byDate.get(session.date) ?? 0) + km));
+          cardioMap.get(normalizedName) ??
+          new Map<string, { km: number; sec: number }>();
+        const previous = byDate.get(session.date);
+        byDate.set(session.date, {
+          km: round1((previous?.km ?? 0) + km),
+          sec: Math.round((previous?.sec ?? 0) + sec),
+        });
         cardioMap.set(normalizedName, byDate);
         continue;
       }
@@ -531,7 +552,16 @@ function buildStats(
       name: canonicalNames.get(normalizedName) ?? normalizedName,
       sessions: byDate.size,
       points: [...byDate.entries()]
-        .map(([date, km]) => ({ date, km }))
+        .map(([date, run]) => ({
+          date,
+          km: run.km,
+          ...(run.sec > 0
+            ? {
+                min: round1(run.sec / 60),
+                paceMinPerKm: round1(run.sec / 60 / run.km),
+              }
+            : {}),
+        }))
         .sort((a, b) => a.date.localeCompare(b.date))
         .slice(-12),
     }))
@@ -587,7 +617,11 @@ function buildStats(
         (set) => set?.done !== false,
       );
       if (doneSets.length === 0) continue;
-      const part = exercise.bodyPart ?? inferBodyPart(name);
+      const part = resolveBodyPart(
+        name,
+        exercise.bodyPart,
+        exercise.bodyPartManual,
+      );
       const item = inventory.get(normalizedName) ?? {
         name: canonicalNames.get(normalizedName) ?? name,
         part,

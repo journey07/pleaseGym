@@ -1,8 +1,8 @@
 // 부위(bodyPart) 단위 집계 — 서버 route + 클라이언트 공용 순수 함수.
 // "신규 도배" 해결의 핵심: 종목명이 아니라 부위로 볼륨/빈도/방치를 집계한다.
-// 부위는 exercise.bodyPart(수동 교정 우선) ?? inferBodyPart(name).
+// 부위는 수동 교정(bodyPartManual)이 있으면 그 값, 없으면 이름에서 다시 추론한다.
 
-import { BodyPart, MUSCLE_PARTS, inferBodyPart } from "./bodyPart";
+import { BodyPart, MUSCLE_PARTS, resolveBodyPart } from "./bodyPart";
 import {
   assistedLoad,
   bodyweightForDate,
@@ -21,6 +21,7 @@ export type StatExercise = {
   metric?: string;
   assisted?: boolean;
   bodyPart?: BodyPart;
+  bodyPartManual?: boolean;
   sets?: StatSet[];
 };
 export type StatSession = { date?: string; exercises?: StatExercise[] };
@@ -79,7 +80,7 @@ const exerciseVolume = (
 };
 
 const partOf = (ex: StatExercise): BodyPart =>
-  ex.bodyPart ?? inferBodyPart(String(ex.name ?? ""));
+  resolveBodyPart(String(ex.name ?? ""), ex.bodyPart, ex.bodyPartManual);
 
 /**
  * 근육 8부위(기타·거리 제외) 집계. todayKey(YYYY-MM-DD) 기준 상대 창.
